@@ -59,7 +59,7 @@ class EightIntersectionEnv:
         for tls in self.group_b:
             self.tls_group[tls] = 'group_b'
 
-        # Incoming edge IDs for each intersection (N, S, E, W)
+        # Incoming edge IDs for each intersection(N, S, E, W)
         self.edges = {
             'tls_1': {
                 'north': 'north_to_i1', 'south': 'i3_to_i1',
