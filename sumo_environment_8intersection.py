@@ -133,7 +133,8 @@ class EightIntersectionEnv:
             "--no-step-log", "true",
             "--waiting-time-memory", "10000",
             "--time-to-teleport", "-1",
-            "--no-warnings", "true"
+            "--no-warnings", "true",
+            "--random",  # Randomize vehicle spawns each episode for robust training
         ]
         traci.start(sumo_cmd)
         self.sumo_running = True
