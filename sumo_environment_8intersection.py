@@ -59,7 +59,7 @@ class EightIntersectionEnv:
         for tls in self.group_b:
             self.tls_group[tls] = 'group_b'
 
-        # Incoming edge IDs for each intersection (N, S, E, W)
+        # Incoming edge IDs for each intersection(N, S, E, W)
         self.edges = {
             'tls_1': {
                 'north': 'north_to_i1', 'south': 'i3_to_i1',
@@ -133,7 +133,8 @@ class EightIntersectionEnv:
             "--no-step-log", "true",
             "--waiting-time-memory", "10000",
             "--time-to-teleport", "-1",
-            "--no-warnings", "true"
+            "--no-warnings", "true",
+            "--random",  # Randomize vehicle spawns each episode for robust training
         ]
         traci.start(sumo_cmd)
         self.sumo_running = True
