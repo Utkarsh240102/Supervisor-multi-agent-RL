@@ -64,14 +64,16 @@ def partial_transfer(agent_7dim, checkpoint_path):
     """
     Load an 8-dim checkpoint into a 7-dim agent.
 
-    Strategy for fc1 (input layer):
-      Old: weight shape [128, 8]  — columns 0-5 are local features,
-                                    columns 6-7 are neighbor queues (discarded)
-      New: weight shape [128, 7]  — columns 0-5 copied from old,
-                                    column  6   is a new random column
-                                    (will learn the supervisor signal mapping)
+    DDQNAgent saves with keys:
+      'online_network_state_dict', 'target_network_state_dict'
+    Layer names: 'network.0.weight', 'network.2.weight', 'network.4.weight'
 
-    All other layers (fc2, fc3, target network) are copied as-is.
+    Strategy for input layer (network.0.weight):
+      Old: shape [128, 8] — columns 0-5 = local features, 6-7 = neighbor queues
+      New: shape [128, 7] — columns 0-5 copied, column 6 is new random
+                            (will learn supervisor signal mapping)
+
+    All other layers copied as-is.
     """
     if not os.path.exists(checkpoint_path):
         print(f"    ⚠  No checkpoint at {checkpoint_path} — using random weights")
@@ -81,34 +83,36 @@ def partial_transfer(agent_7dim, checkpoint_path):
     ckpt   = torch.load(checkpoint_path, map_location=device)
 
     # ── Online network ───────────────────────────────────────────
-    old_state  = ckpt['online_net_state_dict']
-    new_state  = agent_7dim.online_network.state_dict()
+    old_state = ckpt['online_network_state_dict']
+    new_state = agent_7dim.online_network.state_dict()
 
-    # fc1 weight: take first 6 columns, add one random column
-    old_fc1_w  = old_state['fc1.weight']          # [128, 8]
-    new_fc1_w  = new_state['fc1.weight'].clone()  # [128, 7]
-    new_fc1_w[:, :6] = old_fc1_w[:, :6]          # copy local feature weights
-    # column 6 (supervisor signal) stays as Xavier-initialised random
-    new_state['fc1.weight'] = new_fc1_w
+    # Input layer: take first 6 columns only
+    old_w = old_state['network.0.weight']          # [128, 8]
+    new_w = new_state['network.0.weight'].clone()  # [128, 7]
+    new_w[:, :6] = old_w[:, :6]                   # copy local feature weights
+    # column 6 (supervisor signal weight) stays random
+    new_state['network.0.weight'] = new_w
 
-    # fc1 bias, fc2, fc3 — copy as-is
-    for key in ['fc1.bias', 'fc2.weight', 'fc2.bias', 'fc3.weight', 'fc3.bias']:
-        if key in old_state and key in new_state:
+    # Copy bias + all other layers as-is
+    for key in ['network.0.bias', 'network.2.weight', 'network.2.bias',
+                'network.4.weight', 'network.4.bias']:
+        if key in old_state:
             new_state[key] = old_state[key]
 
     agent_7dim.online_network.load_state_dict(new_state)
 
     # ── Target network: same transfer ───────────────────────────
-    old_target  = ckpt['target_net_state_dict']
-    new_target  = agent_7dim.target_network.state_dict()
+    old_target = ckpt['target_network_state_dict']
+    new_target = agent_7dim.target_network.state_dict()
 
-    old_fc1_tw  = old_target['fc1.weight']
-    new_fc1_tw  = new_target['fc1.weight'].clone()
-    new_fc1_tw[:, :6] = old_fc1_tw[:, :6]
-    new_target['fc1.weight'] = new_fc1_tw
+    old_tw = old_target['network.0.weight']
+    new_tw = new_target['network.0.weight'].clone()
+    new_tw[:, :6] = old_tw[:, :6]
+    new_target['network.0.weight'] = new_tw
 
-    for key in ['fc1.bias', 'fc2.weight', 'fc2.bias', 'fc3.weight', 'fc3.bias']:
-        if key in old_target and key in new_target:
+    for key in ['network.0.bias', 'network.2.weight', 'network.2.bias',
+                'network.4.weight', 'network.4.bias']:
+        if key in old_target:
             new_target[key] = old_target[key]
 
     agent_7dim.target_network.load_state_dict(new_target)
