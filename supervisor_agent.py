@@ -1,10 +1,15 @@
 """
-Supervisor Agent for Local Group Coordination
-==============================================
-Manages one group of 4 intersections.
-- Observes all 4 agents' local states (4 × 6 = 24-dim input)
-- Outputs 4 coordination signals in [-1, +1] (one per agent)
-- Trains using group average reward via TD learning
+Supervisor Agent — Local + Global Group Coordination
+=====================================================
+Step 1 (local):  24-dim input  (4 agents × 6-dim each)
+Step 2 (global): 28-dim input  (24 own + 4 from other supervisor)
+
+The 4-dim cross-group summary:
+  [avg_queue, max_queue, avg_waiting_time, boundary_queue]
+
+New methods for Step 2:
+  get_signals_with_global()  — forward pass with other group's summary
+  store_with_global()        — store 28-dim experience in buffer
 """
 
 import numpy as np
@@ -22,8 +27,11 @@ import os
 class SupervisorNetwork(nn.Module):
     """
     3-layer MLP for the supervisor.
-    Input : concatenated states of all agents in group (24-dim)
-    Output: coordination signals via tanh → range [-1, +1]
+
+    Step 1 (local):  input_dim = 24  (4 agents × 6-dim)
+    Step 2 (global): input_dim = 28  (24 own + 4 from other supervisor)
+
+    Output: 4 coordination signals via tanh → range [-1, +1]
     """
     def __init__(self, input_dim=24, hidden_dim=64, output_dim=4):
         super(SupervisorNetwork, self).__init__()
@@ -107,12 +115,19 @@ class SupervisorAgent:
                  learning_rate=0.001,
                  gamma=0.95,
                  buffer_capacity=10_000,
-                 batch_size=64):
-
+                 batch_size=64,
+                 global_summary_dim=0):
+        """
+        Args:
+            global_summary_dim: 0 for Step 1 (local only),
+                                4 for Step 2 (+ cross-group summary)
+        """
         self.group_tls_ids      = group_tls_ids
-        self.group_size         = len(group_tls_ids)           # 4
-        self.input_dim          = self.group_size * state_dim_per_agent  # 24
-        self.output_dim         = self.group_size              # 4
+        self.group_size         = len(group_tls_ids)                           # 4
+        self.local_input_dim    = self.group_size * state_dim_per_agent        # 24
+        self.global_summary_dim = global_summary_dim                           # 0 or 4
+        self.input_dim          = self.local_input_dim + global_summary_dim    # 24 or 28
+        self.output_dim         = self.group_size                              # 4
         self.gamma              = gamma
         self.batch_size         = batch_size
         self.train_step         = 0
@@ -148,15 +163,13 @@ class SupervisorAgent:
     # ── Core API ────────────────────────────────────────────────────
     def get_signals(self, local_states_dict):
         """
-        Forward pass: generate coordination signals for each agent.
+        Step 1 forward pass — local only (24-dim).
 
         Args:
             local_states_dict: {tls_id: np.array shape (6,)}
 
         Returns:
             signals_dict: {tls_id: float in [-1, +1]}
-              Negative → low urgency ("you are fine")
-              Positive → high urgency ("you are the bottleneck")
         """
         group_state  = self._build_group_state(local_states_dict)
         state_tensor = torch.FloatTensor(group_state).unsqueeze(0).to(self.device)
@@ -168,9 +181,33 @@ class SupervisorAgent:
 
         return {tls: float(signals[i]) for i, tls in enumerate(self.group_tls_ids)}
 
+    def get_signals_with_global(self, local_states_dict, other_summary):
+        """
+        Step 2 forward pass — local (24-dim) + cross-group summary (4-dim) = 28-dim.
+
+        Args:
+            local_states_dict: {tls_id: np.array shape (6,)}
+            other_summary    : np.array shape (4,)
+                               [avg_queue, max_queue, avg_waiting_time, boundary_queue]
+                               from the OTHER supervisor group
+
+        Returns:
+            signals_dict: {tls_id: float in [-1, +1]}
+        """
+        group_state   = self._build_group_state(local_states_dict)            # 24-dim
+        global_state  = np.concatenate([group_state, other_summary.astype(np.float32)])  # 28-dim
+        state_tensor  = torch.FloatTensor(global_state).unsqueeze(0).to(self.device)
+
+        self.online_net.eval()
+        with torch.no_grad():
+            signals = self.online_net(state_tensor).squeeze(0).cpu().numpy()
+        self.online_net.train()
+
+        return {tls: float(signals[i]) for i, tls in enumerate(self.group_tls_ids)}
+
     def store(self, local_states_dict, group_reward, next_local_states_dict, done):
         """
-        Store one group-level transition in replay buffer.
+        Step 1: Store 24-dim group transition.
 
         Args:
             local_states_dict      : current  {tls_id: 6-dim state}
@@ -181,6 +218,29 @@ class SupervisorAgent:
         group_state      = self._build_group_state(local_states_dict)
         next_group_state = self._build_group_state(next_local_states_dict)
         self.memory.store(group_state, group_reward, next_group_state, done)
+
+    def store_with_global(self, local_states_dict, other_summary,
+                          group_reward,
+                          next_local_states_dict, next_other_summary, done):
+        """
+        Step 2: Store 28-dim group transition (24 own + 4 cross-group summary).
+
+        Args:
+            local_states_dict      : current  {tls_id: 6-dim state}
+            other_summary          : current  np.array shape (4,) from other supervisor
+            group_reward           : scalar average reward of this group
+            next_local_states_dict : next     {tls_id: 6-dim state}
+            next_other_summary     : next     np.array shape (4,) from other supervisor
+            done                   : episode end flag
+        """
+        group_state      = self._build_group_state(local_states_dict)
+        next_group_state = self._build_group_state(next_local_states_dict)
+
+        # Concatenate with cross-group summary → 28-dim
+        full_state      = np.concatenate([group_state,      other_summary.astype(np.float32)])
+        next_full_state = np.concatenate([next_group_state, next_other_summary.astype(np.float32)])
+
+        self.memory.store(full_state, group_reward, next_full_state, done)
 
     def train(self):
         """
@@ -252,30 +312,49 @@ class SupervisorAgent:
 # Quick smoke-test (run this file directly to verify)
 # ─────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    print("=== SupervisorAgent smoke test ===\n")
+    print("=== SupervisorAgent smoke test (local + global) ===\n")
 
-    group_ids = ['tls_1', 'tls_2', 'tls_3', 'tls_4']
-    sup = SupervisorAgent(group_tls_ids=group_ids)
+    group_ids   = ['tls_1', 'tls_2', 'tls_3', 'tls_4']
+    group_ids_b = ['tls_5', 'tls_6', 'tls_7', 'tls_8']
 
-    # Fake local states (6-dim each)
+    # ── Step 1 (local only, 24-dim) ───────────────────────────────
+    print("--- Step 1: Local supervisor (24-dim) ---")
+    sup_local = SupervisorAgent(group_tls_ids=group_ids, global_summary_dim=0)
     fake_states = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
-
-    # Test get_signals
-    signals = sup.get_signals(fake_states)
-    print("Coordination signals:")
+    signals = sup_local.get_signals(fake_states)
+    print("Local signals:")
     for tls, sig in signals.items():
         print(f"  {tls}: {sig:+.4f}")
 
-    # Test store + train (need ≥ 64 samples)
-    fake_next = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
+    # ── Step 2 (global, 28-dim) ───────────────────────────────────
+    print("\n--- Step 2: Global supervisor (28-dim) ---")
+    sup_global = SupervisorAgent(group_tls_ids=group_ids, global_summary_dim=4)
+
+    # Fake cross-group summary from Group B
+    fake_summary_b = np.array([8.0, 15.0, 48.3, 26.0], dtype=np.float32)
+    # [avg_queue, max_queue, avg_waiting_time, boundary_queue]
+
+    signals_global = sup_global.get_signals_with_global(fake_states, other_summary=fake_summary_b)
+    print("Global signals (A sees B's summary):")
+    for tls, sig in signals_global.items():
+        print(f"  {tls}: {sig:+.4f}")
+
+    # ── Test store_with_global + train ────────────────────────────
+    fake_next        = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
+    fake_next_summary = np.array([7.0, 12.0, 40.0, 20.0], dtype=np.float32)
     for _ in range(100):
-        sup.store(fake_states, group_reward=-250.0, next_local_states_dict=fake_next, done=False)
+        sup_global.store_with_global(
+            fake_states, fake_summary_b,
+            group_reward=-250.0,
+            next_local_states_dict=fake_next,
+            next_other_summary=fake_next_summary,
+            done=False
+        )
+    loss = sup_global.train()
+    print(f"\nTraining loss (28-dim): {loss:.6f}")
 
-    loss = sup.train()
-    print(f"\nTraining loss: {loss:.6f}")
+    # ── Save / load ───────────────────────────────────────────────
+    sup_global.save('checkpoints_supervisor/test_global_supervisor.pth')
+    sup_global.load('checkpoints_supervisor/test_global_supervisor.pth')
 
-    # Test save / load
-    sup.save('checkpoints_supervisor/test_supervisor.pth')
-    sup.load('checkpoints_supervisor/test_supervisor.pth')
-
-    print("\n✅ All checks passed!")
+    print("\n✅ All checks passed! (local + global)")
