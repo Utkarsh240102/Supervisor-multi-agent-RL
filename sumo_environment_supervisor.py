@@ -202,6 +202,42 @@ class SupervisorSumoEnvironment:
         """
         return {tls: self._get_local_state(tls) for tls in self.tls_ids}
 
+    def get_group_summary(self, local_states_dict, group_tls_ids, boundary_tls_ids):
+        """
+        Compute 4-value summary of one group for cross-supervisor communication.
+        Args:
+            local_states_dict : {tls_id: np.array shape (6,)}
+            group_tls_ids     : list of tls_ids in the group
+            boundary_tls_ids  : list of tls_ids in the group that face the OTHER group
+                                (e.g. tls_2, tls_4 for Group A; tls_5, tls_7 for Group B)
+        Returns:
+            np.array shape (4,) containing:
+               [avg_queue, max_queue, avg_waiting_time, boundary_queue]
+        """
+        # Queue info from local states (index 0-3 are the 4 direction queues)
+        group_queues = [local_states_dict[tls][:4].sum() for tls in group_tls_ids]
+        avg_queue    = np.mean(group_queues)
+        max_queue    = np.max(group_queues)
+
+        # Waiting time from SUMO (need to query directly)
+        total_wait = 0.0
+        vehicle_count = 0
+        for tls in group_tls_ids:
+            for direction in ['north', 'south', 'east', 'west']:
+                edge = self.edges[tls][direction]
+                for vid in traci.edge.getLastStepVehicleIDs(edge):
+                    try:
+                        total_wait += traci.vehicle.getWaitingTime(vid)
+                        vehicle_count += 1
+                    except Exception:
+                        pass
+        avg_wait_time = total_wait / max(vehicle_count, 1)
+
+        # Boundary queue (only the agents facing the other group)
+        boundary_queue = sum(local_states_dict[tls][:4].sum() for tls in boundary_tls_ids)
+
+        return np.array([avg_queue, max_queue, avg_wait_time, boundary_queue], dtype=np.float32)
+
     def build_enhanced_states(self, local_states, signals_a, signals_b):
         """
         Append supervisor coordination signal to each agent's local state.
