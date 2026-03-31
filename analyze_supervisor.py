@@ -32,7 +32,10 @@ C_SUP_B     = '#C0392B'   # dark red
 # Known baselines
 BASELINE_4INT  = -585.8       # per intersection (from 4-agent cooperative run)
 BASELINE_8INT  = -197.0       # per intersection (from 800-ep retrain)
-SUPERVISOR_AVG = -187.9       # per intersection (our result)
+SUPERVISOR_AVG = -187.9       # per intersection (our local result)
+
+# We'll compute GLOBAL_SUPERVISOR_AVG dynamically if the file exists
+GLOBAL_SUPERVISOR_AVG = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,10 +57,30 @@ def load_data():
     path = 'results_supervisor/eval_results.csv'
     if os.path.exists(path):
         data['sup_eval'] = pd.read_csv(path)
-        print(f"✓ Loaded supervisor eval results ({len(data['sup_eval'])} episodes)")
+        print(f"✓ Loaded local supervisor eval results ({len(data['sup_eval'])} episodes)")
     else:
         print(f"✗ Missing: {path}")
         data['sup_eval'] = None
+
+    # Global Supervisor training history
+    path = 'results_global_supervisor/training_history.csv'
+    if os.path.exists(path):
+        data['global_train'] = pd.read_csv(path)
+        print(f"✓ Loaded GLOBAL supervisor training history ({len(data['global_train'])} episodes)")
+    else:
+        print(f"✗ Missing: {path}")
+        data['global_train'] = None
+
+    # Global Supervisor eval results
+    path = 'results_global_supervisor/eval_results.csv'
+    if os.path.exists(path):
+        data['global_eval'] = pd.read_csv(path)
+        print(f"✓ Loaded GLOBAL supervisor eval results ({len(data['global_eval'])} episodes)")
+        global GLOBAL_SUPERVISOR_AVG
+        GLOBAL_SUPERVISOR_AVG = data['global_eval']['network_reward'].mean() / 8
+    else:
+        print(f"✗ Missing: {path}")
+        data['global_eval'] = None
 
     # 8-intersection baseline training history
     path = 'results_8intersection/training_history.csv'
@@ -323,6 +346,12 @@ def plot_system_comparison(data):
                '8-Int\nLocal Supervisor\n(Ours)']
     vals  = [BASELINE_4INT, BASELINE_8INT, SUPERVISOR_AVG]
     clrs  = [C_4INT, C_BASELINE, C_SUP]
+
+    if GLOBAL_SUPERVISOR_AVG is not None:
+        systems.append('8-Int\nGlobal Supervisor\n(Ours)')
+        vals.append(GLOBAL_SUPERVISOR_AVG)
+        clrs.append('#8E44AD') # Purple for global
+
     bars  = ax.bar(systems, vals, color=clrs, alpha=0.85, edgecolor='black',
                    linewidth=1.5, width=0.5)
     ax.set_title('Avg Reward per Intersection — System Comparison',
@@ -449,12 +478,19 @@ def main():
     for f in sorted(os.listdir(OUTPUT_DIR)):
         size = os.path.getsize(f'{OUTPUT_DIR}/{f}') // 1024
         print(f"    {f}  ({size} KB)")
-    print(f"\n  Summary:")
+    print(f"  Summary:")
     print(f"    4-Int Cooperative baseline : {BASELINE_4INT:.1f}/intersection")
     print(f"    8-Int No-Supervisor        : {BASELINE_8INT:.1f}/intersection")
     print(f"    8-Int Local Supervisor     : {SUPERVISOR_AVG:.1f}/intersection")
     diff = SUPERVISOR_AVG - BASELINE_8INT
-    print(f"    Improvement                : {diff:+.1f} ({diff/abs(BASELINE_8INT)*100:+.1f}%)")
+    print(f"    Local Improvement          : {diff:+.1f} ({diff/abs(BASELINE_8INT)*100:+.1f}%)")
+
+    if GLOBAL_SUPERVISOR_AVG is not None:
+        print(f"    8-Int GLOBAL Supervisor    : {GLOBAL_SUPERVISOR_AVG:.1f}/intersection")
+        g_diff = GLOBAL_SUPERVISOR_AVG - BASELINE_8INT
+        print(f"    Global Improvement         : {g_diff:+.1f} ({g_diff/abs(BASELINE_8INT)*100:+.1f}%)")
+        v_local = GLOBAL_SUPERVISOR_AVG - SUPERVISOR_AVG
+        print(f"    Global vs Local            : {v_local:+.1f} ({v_local/abs(SUPERVISOR_AVG)*100:+.1f}%)")
     if errors:
         print(f"\n  ⚠️  {len(errors)} validation issue(s) to review:")
         for e in errors:
