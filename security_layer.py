@@ -181,15 +181,166 @@ class SecurityLayer:
         """
         Entry point for state processing.
 
-        Step 5.1 behavior:
+        Step 5.2 behavior:
         - validates and initializes internal buffers
-        - returns pass-through copy (algorithm routing added in Step 5.2)
+        - routes by security mode
+        - guarantees output format {tls_id: np.ndarray(6,)}
         """
-        _ = step  # used in later steps
-
         self._validate_input_states(raw_states)
 
         if self._tls_ids is None:
             self._initialize_state_buffers(raw_states)
 
-        return self._copy_states(raw_states)
+        states = self._copy_states(raw_states)
+
+        if self.config.mode == "baseline":
+            output = states
+            self._update_history_buffers(output)
+
+        elif self.config.mode == "attack":
+            attacked = self._apply_fdi_attack(states, step)
+            output = attacked
+            self._update_history_buffers(output)
+
+        elif self.config.mode == "defense":
+            attacked = self._apply_fdi_attack(states, step)
+            output = self._detect_and_correct(attacked, step)
+
+        elif self.config.mode == "unreliable":
+            output = self._apply_network_unreliability(states, step)
+            self._update_history_buffers(output)
+
+        elif self.config.mode == "secure":
+            attacked = self._apply_fdi_attack(states, step)
+            output = self._detect_and_correct(attacked, step)
+
+        else:
+            raise ValueError(f"Unhandled mode: {self.config.mode}")
+
+        # Final guard: keep strict output format.
+        self._validate_input_states(output)
+        return output
+
+    def _update_history_buffers(self, states: Dict[str, np.ndarray]) -> None:
+        """Append current queue vectors (indices 0..3) to rolling history buffers."""
+        for tls, state in states.items():
+            self.history_buffers[tls].append(np.array(state[:4], dtype=np.float32).copy())
+
+    def _apply_fdi_attack(self, states: Dict[str, np.ndarray], step: int) -> Dict[str, np.ndarray]:
+        """Apply probabilistic false-data-injection attack on queue indices 0..3."""
+        attacked = self._copy_states(states)
+
+        for tls in attacked:
+            if self.rng.random() > self.config.fdi_prob:
+                continue
+
+            lane_idx = int(self.rng.integers(0, 4))
+            injection = float(self.rng.uniform(self.config.fdi_min, self.config.fdi_max))
+
+            old_val = float(attacked[tls][lane_idx])
+            new_val = float(np.clip(old_val + injection, 0.0, 20.0))
+            attacked[tls][lane_idx] = new_val
+
+            event = {
+                "step": int(step),
+                "tls_id": tls,
+                "lane_idx": lane_idx,
+                "old_value": old_val,
+                "new_value": new_val,
+                "injection": injection,
+            }
+            self.attack_log.append(event)
+            self.total_attack_events += 1
+
+        return attacked
+
+    def _detect_and_correct(self, states: Dict[str, np.ndarray], step: int) -> Dict[str, np.ndarray]:
+        """Detect anomalous queue values and correct flagged lanes with LSTM prediction."""
+        corrected = self._copy_states(states)
+
+        for tls in corrected:
+            queue_now = np.array(corrected[tls][:4], dtype=np.float32)
+            hist = self.history_buffers[tls]
+
+            # Need sufficient history before z-score detection.
+            min_history = min(10, self.config.window_size)
+            if len(hist) < min_history:
+                hist.append(queue_now.copy())
+                continue
+
+            history_arr = np.stack(list(hist), axis=0)  # (k, 4)
+            mean = history_arr.mean(axis=0)
+            std = history_arr.std(axis=0) + 1e-6
+            z = np.abs(queue_now - mean) / std
+
+            flagged = np.where(z > self.config.z_threshold)[0]
+
+            if flagged.size > 0:
+                if self.lstm_model is not None:
+                    # Use most recent window_size history for prediction.
+                    if len(hist) >= self.config.window_size:
+                        seq = np.stack(list(hist)[-self.config.window_size :], axis=0)
+                    else:
+                        seq = history_arr
+                    pred = self.lstm_model.predict(seq)
+
+                    old_values = queue_now.copy()
+                    for lane in flagged:
+                        corrected[tls][lane] = float(np.clip(pred[lane], 0.0, 20.0))
+                else:
+                    old_values = queue_now.copy()
+
+                event = {
+                    "step": int(step),
+                    "tls_id": tls,
+                    "flagged_lanes": flagged.astype(int).tolist(),
+                    "z_scores": z.astype(float).tolist(),
+                    "before": old_values.astype(float).tolist(),
+                    "after": np.array(corrected[tls][:4], dtype=np.float32).astype(float).tolist(),
+                }
+                self.detection_log.append(event)
+                self.total_detection_events += 1
+
+            hist.append(np.array(corrected[tls][:4], dtype=np.float32).copy())
+
+        return corrected
+
+    def _apply_network_unreliability(self, states: Dict[str, np.ndarray], step: int) -> Dict[str, np.ndarray]:
+        """Apply packet loss + bounded delay and return delivered states."""
+        output = {}
+
+        for tls in states:
+            incoming = np.array(states[tls], dtype=np.float32).copy()
+
+            # Packet loss: reuse last known state.
+            if self.rng.random() < self.config.packet_loss_prob:
+                output[tls] = self.last_known_states[tls].copy()
+                continue
+
+            # Delay insertion for non-lost packets.
+            delay_steps = 0
+            if self.config.max_delay_steps > 0:
+                delay_steps = int(self.rng.integers(0, self.config.max_delay_steps + 1))
+
+            if delay_steps > 0:
+                deliver_step = int(step + delay_steps)
+                self.delay_buffers[tls].append((deliver_step, incoming.copy()))
+
+                # If nothing due yet, serve last known state.
+                if not self.delay_buffers[tls] or self.delay_buffers[tls][0][0] > step:
+                    output[tls] = self.last_known_states[tls].copy()
+                    continue
+
+            # Deliver the most recent packet due at current step.
+            delivered = None
+            while self.delay_buffers[tls] and self.delay_buffers[tls][0][0] <= step:
+                _, delivered_state = self.delay_buffers[tls].popleft()
+                delivered = delivered_state
+
+            if delivered is None:
+                delivered = incoming
+
+            output[tls] = np.array(delivered, dtype=np.float32).copy()
+            self.last_known_states[tls] = output[tls].copy()
+
+        return output
