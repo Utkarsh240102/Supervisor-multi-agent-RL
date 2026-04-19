@@ -10,10 +10,13 @@ This file does not modify existing training/evaluation files.
 
 from __future__ import annotations
 
+import argparse
 import os
 from typing import Dict, Tuple
 
 import numpy as np
+import pandas as pd
+from tqdm import tqdm
 
 from agent import DDQNAgent
 from security_layer import SecurityLayer
@@ -23,6 +26,8 @@ from supervisor_agent import SupervisorAgent
 
 CHECKPOINT_DIR_AGENTS = "checkpoints_supervisor/agents"
 CHECKPOINT_DIR_SUPERVISORS = "checkpoints_supervisor/supervisors"
+RESULTS_DIR = "results_security"
+SCENARIOS = ["baseline", "attack", "defense", "unreliable", "secure"]
 
 
 def load_trained_system(
@@ -189,3 +194,106 @@ def run_single_scenario(
         "detection_rate": summary["detection_rate"],
         "false_positive_rate": summary["false_positive_rate"],
     }
+
+
+def _build_security_layer(mode: str, seed: int = 42) -> SecurityLayer:
+    """Create scenario-specific security layer with reasonable defaults."""
+    return SecurityLayer(
+        mode=mode,
+        fdi_prob=0.15,
+        fdi_min=10.0,
+        fdi_max=15.0,
+        window_size=20,
+        z_threshold=3.0,
+        packet_loss_prob=0.05,
+        max_delay_steps=3,
+        lstm_checkpoint="checkpoints_security/lstm_predictor.pth",
+        seed=seed,
+    )
+
+
+def run_all_scenarios(
+    episodes: int = 20,
+    use_gui: bool = False,
+    num_seconds: int = 1800,
+    delta_time: int = 5,
+    seed: int = 42,
+) -> Dict[str, Dict[str, object]]:
+    """
+    Run all five security scenarios sequentially and save per-scenario episode CSVs.
+
+    Returns:
+        scenario name -> run_single_scenario output
+    """
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    # Bootstrap environment for model initialization/loading dimensions.
+    bootstrap_env = SupervisorSumoEnvironment(
+        use_gui=False,
+        num_seconds=num_seconds,
+        delta_time=delta_time,
+    )
+    agents, supervisor_a, supervisor_b = load_trained_system(bootstrap_env)
+
+    all_results: Dict[str, Dict[str, object]] = {}
+
+    for scenario in tqdm(SCENARIOS, desc="Running scenarios"):
+        env = SupervisorSumoEnvironment(
+            use_gui=use_gui,
+            num_seconds=num_seconds,
+            delta_time=delta_time,
+        )
+        security = _build_security_layer(mode=scenario, seed=seed)
+
+        try:
+            result = run_single_scenario(
+                env=env,
+                agents=agents,
+                supervisor_a=supervisor_a,
+                supervisor_b=supervisor_b,
+                security=security,
+                episodes=episodes,
+            )
+        finally:
+            env.close()
+
+        df = pd.DataFrame(result["episode_rows"])
+        out_path = os.path.join(RESULTS_DIR, f"{scenario}_results.csv")
+        df.to_csv(out_path, index=False)
+
+        all_results[scenario] = result
+
+    return all_results
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run all security scenarios sequentially")
+    parser.add_argument("--episodes", type=int, default=20, help="Episodes per scenario")
+    parser.add_argument("--gui", action="store_true", help="Run SUMO with GUI")
+    parser.add_argument("--num-seconds", type=int, default=1800, help="Episode duration")
+    parser.add_argument("--delta-time", type=int, default=5, help="Decision interval")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    args = parser.parse_args()
+
+    results = run_all_scenarios(
+        episodes=args.episodes,
+        use_gui=args.gui,
+        num_seconds=args.num_seconds,
+        delta_time=args.delta_time,
+        seed=args.seed,
+    )
+
+    print("\nPer-scenario run complete. Saved files:")
+    for scenario in SCENARIOS:
+        print(f"  {os.path.join(RESULTS_DIR, f'{scenario}_results.csv')}")
+        summary = results[scenario]["summary"]
+        print(
+            f"    avg_network_reward={summary['avg_network_reward']:.3f}, "
+            f"avg_wait_time={summary['avg_wait_time']:.3f}, "
+            f"detection_rate={summary['detection_rate']:.3f}, "
+            f"false_positive_rate={summary['false_positive_rate']:.3f}"
+        )
+
+
+if __name__ == "__main__":
+    main()
