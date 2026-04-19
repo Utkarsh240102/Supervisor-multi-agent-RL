@@ -102,9 +102,11 @@ def run_single_scenario(
     """
     per_intersection_rewards = {tls: [] for tls in env.tls_ids}
     network_rewards = []
+    avg_intersection_rewards = []
     wait_times = []
+    episode_rows = []
 
-    for _ in range(episodes):
+    for ep in range(episodes):
         local_states = env.reset()
         local_states = security.process(local_states, step=0)
 
@@ -140,16 +142,50 @@ def run_single_scenario(
         for tls in env.tls_ids:
             per_intersection_rewards[tls].append(ep_reward[tls])
 
-        network_rewards.append(float(sum(ep_reward.values())))
+        net_reward = float(sum(ep_reward.values()))
+        avg_intersection = float(net_reward / len(env.tls_ids))
+
+        network_rewards.append(net_reward)
+        avg_intersection_rewards.append(avg_intersection)
+
+        row = {
+            "episode": int(ep + 1),
+            "network_reward": net_reward,
+            "avg_intersection_reward": avg_intersection,
+            "avg_wait_time": float(wait_times[-1]) if wait_times else 0.0,
+        }
+        for tls in env.tls_ids:
+            row[tls] = float(ep_reward[tls])
+        episode_rows.append(row)
 
     metrics = security.get_metrics()
 
+    summary = {
+        "episodes": int(episodes),
+        "avg_network_reward": float(np.mean(network_rewards)) if network_rewards else 0.0,
+        "std_network_reward": float(np.std(network_rewards)) if network_rewards else 0.0,
+        "avg_intersection_reward": float(np.mean(avg_intersection_rewards)) if avg_intersection_rewards else 0.0,
+        "std_intersection_reward": float(np.std(avg_intersection_rewards)) if avg_intersection_rewards else 0.0,
+        "avg_wait_time": float(np.mean(wait_times)) if wait_times else 0.0,
+        "std_wait_time": float(np.std(wait_times)) if wait_times else 0.0,
+        "detection_rate": float(metrics.get("detection_rate", 0.0)),
+        "false_positive_rate": float(metrics.get("false_positive_rate", 0.0)),
+    }
+
     return {
+        "episodes": int(episodes),
+        "episode_rows": episode_rows,
         "network_rewards": network_rewards,
+        "avg_intersection_rewards": avg_intersection_rewards,
         "per_intersection_rewards": per_intersection_rewards,
         "wait_times": wait_times,
         "security_metrics": metrics,
-        "avg_network_reward": float(np.mean(network_rewards)) if network_rewards else 0.0,
-        "std_network_reward": float(np.std(network_rewards)) if network_rewards else 0.0,
-        "avg_wait_time": float(np.mean(wait_times)) if wait_times else 0.0,
+        "summary": summary,
+        "avg_network_reward": summary["avg_network_reward"],
+        "std_network_reward": summary["std_network_reward"],
+        "avg_intersection_reward": summary["avg_intersection_reward"],
+        "std_intersection_reward": summary["std_intersection_reward"],
+        "avg_wait_time": summary["avg_wait_time"],
+        "detection_rate": summary["detection_rate"],
+        "false_positive_rate": summary["false_positive_rate"],
     }
