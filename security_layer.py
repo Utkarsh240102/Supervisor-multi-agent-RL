@@ -344,3 +344,35 @@ class SecurityLayer:
             self.last_known_states[tls] = output[tls].copy()
 
         return output
+
+    def get_metrics(self) -> Dict[str, float]:
+        """
+        Return current security-layer metrics for experiment reporting.
+
+        Keys:
+          total_attack_events
+          total_detection_events
+          false_positive_count
+          detection_rate
+          false_positive_rate
+        """
+        detection_rate = (
+            float(self.total_detection_events) / float(self.total_attack_events)
+            if self.total_attack_events > 0
+            else 0.0
+        )
+
+        clean_states_seen = max(0, self.total_detection_events + self.false_positive_count)
+        false_positive_rate = (
+            float(self.false_positive_count) / float(clean_states_seen)
+            if clean_states_seen > 0
+            else 0.0
+        )
+
+        return {
+            "total_attack_events": float(self.total_attack_events),
+            "total_detection_events": float(self.total_detection_events),
+            "false_positive_count": float(self.false_positive_count),
+            "detection_rate": float(detection_rate),
+            "false_positive_rate": float(false_positive_rate),
+        }
