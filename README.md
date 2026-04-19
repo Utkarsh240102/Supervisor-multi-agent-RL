@@ -168,3 +168,4 @@ reward = -(queue_length + 0.5 * waiting_time + 10 * phase_switch_penalty)
 ## 📝 Authors & License
 **Project Team**: RL Traffic Control Research Group  
 Developed for academic/research purposes inside the SUMO Traffic modeling suite. MIT License.
+
