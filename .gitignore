@@ -55,3 +55,8 @@ summary*.xml
 # sumo_files/*.sumocfg
 # Uncomment above if you want to regenerate these
 # Keep them committed so others can run evaluation immediately
+
+
+security-plan.md
+
+claude.md
