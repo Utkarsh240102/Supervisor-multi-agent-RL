@@ -88,8 +88,6 @@ class SupervisorSumoEnvironment:
         self.current_phases         = {tls: 0   for tls in self.tls_ids}
         self.time_since_last_change = {tls: 0   for tls in self.tls_ids}
         self.simulation_step        = 0
-        self.total_waiting_time     = {tls: 0.0 for tls in self.tls_ids}
-
     # ──────────────────────────────────────────────────────────────
     # SUMO lifecycle
     # ──────────────────────────────────────────────────────────────
@@ -118,8 +116,6 @@ class SupervisorSumoEnvironment:
         self.current_phases         = {tls: 0   for tls in self.tls_ids}
         self.time_since_last_change = {tls: 0   for tls in self.tls_ids}
         self.simulation_step        = 0
-        self.total_waiting_time     = {tls: 0.0 for tls in self.tls_ids}
-
         for tls in self.tls_ids:
             traci.trafficlight.setPhase(tls, 0)
         for _ in range(self.delta_time):
@@ -279,8 +275,6 @@ class SupervisorSumoEnvironment:
                     total_waiting += traci.vehicle.getWaitingTime(vid)
                 except Exception:
                     pass
-
-        self.total_waiting_time[tls_id] += total_waiting
 
         reward = -total_queue - 0.5 * total_waiting
 
