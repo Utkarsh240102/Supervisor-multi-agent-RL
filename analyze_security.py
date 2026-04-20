@@ -50,6 +50,39 @@ def plot_average_reward(summary_df):
     plt.savefig(output_path, dpi=300)
     plt.close()
 
+def plot_average_wait_time(summary_df):
+    """Chart 2: Average Wait Time Comparison"""
+    print("Generating Chart 2: Average Wait Time Comparison...")
+    plt.figure(figsize=(10, 6))
+    
+    scenarios = summary_df['scenario'].tolist()
+    waits = summary_df['avg_wait_time'].tolist()
+    stds = summary_df['std_wait_time'].tolist()
+    
+    colors_list = [COLORS.get(s, '#333333') for s in scenarios]
+    
+    # Create bar chart with standard deviation error bars
+    bars = plt.bar(scenarios, waits, yerr=stds, capsize=8, color=colors_list, alpha=0.85, edgecolor='black')
+    
+    # Add a horizontal dashed line representing the 'baseline' performance
+    baseline_wait = float(summary_df.loc[summary_df['scenario'] == 'baseline', 'avg_wait_time'].iloc[0])
+    plt.axhline(y=baseline_wait, color='black', linestyle='--', alpha=0.6, label='Baseline Performance')
+    
+    # Labels and titles
+    plt.title('Congestion Impact: Average Waiting Time per Vehicle', fontsize=14, fontweight='bold')
+    plt.ylabel('Waiting Time (Lower is Better)', fontsize=12)
+    plt.xlabel('Experiment Scenario', fontsize=12)
+    plt.xticks(ticks=range(len(scenarios)), labels=[s.capitalize() for s in scenarios], fontsize=11)
+    
+    # Put legend in optimal location
+    plt.legend(loc='upper left')
+    
+    # Save the plot
+    plt.tight_layout()
+    output_path = os.path.join(ANALYSIS_DIR, '02_average_wait_time_comparison.png')
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
 def main():
     print(f"Loading data from {RESULTS_DIR}...")
     summary_path = os.path.join(RESULTS_DIR, "scenario_comparison.csv")
@@ -62,6 +95,7 @@ def main():
     
     # Generate charts
     plot_average_reward(summary_df)
+    plot_average_wait_time(summary_df)
     
     print(f"\nAll charts saved successfully to {ANALYSIS_DIR}/")
 
