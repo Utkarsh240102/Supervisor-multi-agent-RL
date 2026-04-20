@@ -11,12 +11,12 @@
 - [Overview](#-overview)
 - [System Architecture Progression](#-system-architecture-progression)
   - [Phase 0 & 1: Single Agent & 2x2 Grid](#phase-0--1-single-agent--2x2-grid-flat-multi-agent)
-  - [Phase 2: 8-Intersection Hierarchical Supervisors](#phase-2-8-intersection-hierarchical-supervisors)
-- [Comprehensive Performance Results](#-comprehensive-performance-results)
+  - [Phase 2: 8-Intersection Hierarchical Supervisors](#phase-2-8-intersection-hierarchical-supervisors)  - [Phase 3: Cyber Security & LSTM Defense](#phase-3-cyber-security--lstm-defense)- [Comprehensive Performance Results](#-comprehensive-performance-results)
 - [Installation & Setup](#-installation--setup)
 - [Usage & Commands](#-usage--commands)
   - [Phase 1 Scripts](#phase-1-single--flat-multi-agent)
   - [Phase 2 Scripts](#phase-2-hierarchical-supervisors)
+  - [Phase 3 Security Scripts](#phase-3-cyber-security--lstm-defense-scripts)
 - [Visualization Suite](#-visualization-suite)
 - [Hyperparameters & Training Details](#-hyperparameters--training-details)
 
@@ -47,7 +47,12 @@ As the grid scaled up to 8 heavily trafficked intersections, flat multi-agent sy
 
 - **Step 1: Local Supervisors:** A localized supervisor reads the exact queues of all 4 agents (**24-dimensional view**) and dispatches a coordinating 'urgency signal' `[-1, 1]` to its group. It is trained entirely on the average group reward to enforce cooperative self-sacrifice.
 - **Step 2: Global Supervisors:** Group A and Group B supervisors compute a macroeconomic summary (`[avg_queue, max_queue, avg_time, boundary_queue]`) and share it with each other. The neural-net expands to **28 input features**, allowing it to proactively halt traffic bound toward jammed neighboring clusters.
+### Phase 3: Cyber Security & LSTM Defense
+Real-world smart city infrastructure is vulnerable to cyberattacks. We implemented a **False Data Injection (FDI)** attack that intercepts and massively inflates queue sensor data before it reaches the agents, immediately breaking down hierarchical coordination.
 
+- **Layer 1 (Statistical Watchman):** A rolling-window Z-Score anomaly detector that identifies poisoned traffic values without triggering on genuine rush-hour congestion peaks.
+- **Layer 2 (LSTM Predictor):** Rather than blindly dropping anomalous data, a frozen, pre-trained Long Short-Term Memory neural network predicts what the correct queue values should mathematically be based on the last 20 seconds of traffic history. The poisoned values are seamlessly replaced, and the RL agents continue to operate optimally.
+[**View the full Security Phase Report here**](SECURITY_PHASE_REPORT.md)
 ---
 
 ## 📊 Comprehensive Performance Results
@@ -71,7 +76,15 @@ Here is the exact algorithmic performance across all project phases, tested over
 
 *(Note on Phase 2: Under a pure 900-episode training loop, the hyper-focused 24-dim Local Supervisor slightly outperformed the 28-dim Global Supervisor. The expanding state space of the Global network requires exponentially more training to perfectly align with boundary traffic, causing slight hesitation at traffic borders. Both decisively defeated the baseline.)*
 
----
+### Phase 3 (Cyber Security & LSTM Defense)
+Tested automatically across a 20-episode battery.
+| Scenario | Network Type | Attack Active? | Detection Rate | Avg Wait Time | Avg System Reward |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`baseline`** | Perfect | No | 0.0 | 0.044 | **-1624.5** |
+| **`attack`** | Perfect | Yes (FDI) | 0.0 | 0.020 | **-1403.0** *(Broken/False)* |
+| **`defense`** | Perfect | Yes (FDI) | ~2.31 | 0.017 | **-1491.5** *(Recovered)* |
+| **`unreliable`**| Delayed | No | 0.0 | 0.022 | **-1838.5** *(Noise)* |
+| **`secure`** | Delayed | Yes (FDI) | ~2.29 | 0.020 | **-1468.0** *(Recovered)* |
 
 ## 🔧 Installation & Setup
 
@@ -129,6 +142,21 @@ python main_global_supervisor.py --mode train --episodes 900 --from-scratch --ep
 
 # Evaluate headless purely for metrics
 python main_global_supervisor.py --mode evaluate --load-final --eval-episodes 20
+```
+
+### Phase 3 (Cyber Security & LSTM Defense Scripts)
+```bash
+# Record clean baseline data for training
+python collect_baseline_data.py --episodes 50
+
+# Train the LSTM traffic predictor
+python train_lstm.py
+
+# Run exactly 10 episodes across all 5 possible scenarios directly via CLI 
+python main_security.py --episodes 10
+
+# Generate analytical plots (reward, wait time, detection accuracy) for presentation
+python analyze_security.py
 ```
 
 ---
