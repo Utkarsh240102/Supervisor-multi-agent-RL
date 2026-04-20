@@ -122,6 +122,49 @@ def plot_per_intersection_breakdown():
     plt.savefig(output_path, dpi=300)
     plt.close()
 
+def plot_detection_performance(summary_df):
+    """Chart 4: Detection Performance (True Positives vs False Positives)"""
+    print("Generating Chart 4: Detection Performance...")
+    
+    # We only care about scenarios where defense is actually active
+    defense_scenarios = ['defense', 'secure']
+    defense_df = summary_df[summary_df['scenario'].isin(defense_scenarios)].copy()
+    
+    if defense_df.empty:
+        print("No defense scenarios found to plot detection metrics.")
+        return
+        
+    scenarios = defense_df['scenario'].tolist()
+    detection_rates = defense_df['detection_rate'].tolist()
+    fp_rates = defense_df['false_positive_rate'].tolist()
+    
+    plt.figure(figsize=(8, 6))
+    x = np.arange(len(scenarios))
+    width = 0.35
+    
+    # Plot true positive and false positive rates
+    # Note: Using standard distinct colors for rates instead of the scenario colors
+    plt.bar(x - width/2, detection_rates, width, label='Attack Detection Rate (%)', color='#17becf', edgecolor='black')
+    plt.bar(x + width/2, fp_rates, width, label='False Positive Rate (%)', color='#bcbd22', edgecolor='black')
+    
+    # Labels and Titles
+    plt.title('Z-Score Anomaly Detector Accuracy', fontsize=14, fontweight='bold')
+    plt.ylabel('Percentage (%)', fontsize=12)
+    plt.xlabel('Experiment Scenario', fontsize=12)
+    plt.xticks(x, [s.capitalize() for s in scenarios], fontsize=11)
+    
+    # Add exact numeric labels on top of the bars to emphasize the 0.0% FP rate
+    for i, (dr, fpr) in enumerate(zip(detection_rates, fp_rates)):
+        plt.text(i - width/2, dr + 0.05, f"{dr:.2f}%", ha='center', fontweight='bold')
+        plt.text(i + width/2, fpr + 0.05, f"{fpr:.2f}%", ha='center', fontweight='bold')
+
+    plt.legend()
+    
+    plt.tight_layout()
+    output_path = os.path.join(ANALYSIS_DIR, '04_detection_performance.png')
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
 def main():
     print(f"Loading data from {RESULTS_DIR}...")
     summary_path = os.path.join(RESULTS_DIR, "scenario_comparison.csv")
@@ -136,6 +179,7 @@ def main():
     plot_average_reward(summary_df)
     plot_average_wait_time(summary_df)
     plot_per_intersection_breakdown()
+    plot_detection_performance(summary_df)
     
     print(f"\nAll charts saved successfully to {ANALYSIS_DIR}/")
 
