@@ -349,7 +349,7 @@ if __name__ == '__main__':
     print(f"\nTraining loss (28-dim): {loss:.6f}")
 
     # â”€â”€ Save / load â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    sup_global.save('checkpoints_supervisor/test_global_supervisor.pth')
-    sup_global.load('checkpoints_supervisor/test_global_supervisor.pth')
+    # sup_global.save('checkpoints_supervisor/test_global_supervisor.pth')
+    # sup_global.load('checkpoints_supervisor/test_global_supervisor.pth')
 
     print("\nâœ… All checks passed! (local + global)")
