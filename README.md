@@ -193,7 +193,17 @@ reward = -(queue_length + 0.5 * waiting_time + 10 * phase_switch_penalty)
 
 ---
 
-## 📝 Authors & License
+## � Future Improvements
+
+**Multi-Agent Credit Assignment for the Supervisor (Independent TD Targets)**
+Currently, the Group Supervisor AI aggregates the rewards of its 4 local intersections together by using a `mean()` average to learn its Temporal Difference (TD) targets. While structurally stable, an average score obscures specific intersection contributions (e.g., if Intersections 1, 2, and 3 perform optimally but Intersection 4 causes a massive traffic jam, an "average" penalty hides the root cause). 
+Mathematically calculating specific, independent TD targets for each individual intersection would explicitly map the supervisor's credit/blame assignment, allowing it to learn much faster and smarter. 
+
+*Implementation Note:* To ensure the mathematical stability of the Phase 2 baselines prior to introducing Phase 3 cyberattack vectors (False Data Injection), the supervisor grouping mechanism was mathematically frozen. Upgrading to independent TD targets is explicitly documented as a high-value future architectural upgrade, avoiding massive project-wide baseline retraining.
+
+---
+
+## �📝 Authors & License
 **Project Team**: RL Traffic Control Research Group  
 Developed for academic/research purposes inside the SUMO Traffic modeling suite. MIT License.
 
