@@ -283,7 +283,7 @@ def main() -> None:
         seed=args.seed,
     )
 
-summary_rows = []
+    summary_rows = []
     print("\nPer-scenario run complete. Saved files:")
     for scenario in SCENARIOS:
         print(f"  {os.path.join(RESULTS_DIR, f'{scenario}_results.csv')}")
