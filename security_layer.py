@@ -300,6 +300,13 @@ class SecurityLayer:
                 }
                 self.detection_log.append(event)
                 self.total_detection_events += 1
+                
+                # Visual Confirmation Logging (Step 8.2)
+                # We identify all flagged lanes and print exactly what was blocked
+                for lane_idx in np.where(flagged)[0]:
+                    print(f"\n[DEFENSE] 🚨 Anomaly detected at {tls}! Lane: {lane_idx}")
+                    print(f"    Value: {old_values[lane_idx]:.1f} (Z-score: {z[lane_idx]:.2f}) -> Replaced with LSTM prediction: {corrected[tls][lane_idx]:.1f}")
+                
 
             hist.append(np.array(corrected[tls][:4], dtype=np.float32).copy())
 
