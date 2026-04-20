@@ -1,15 +1,15 @@
-"""
-Supervisor Agent — Local + Global Group Coordination
+﻿"""
+Supervisor Agent â€” Local + Global Group Coordination
 =====================================================
-Step 1 (local):  24-dim input  (4 agents × 6-dim each)
+Step 1 (local):  24-dim input  (4 agents Ã— 6-dim each)
 Step 2 (global): 28-dim input  (24 own + 4 from other supervisor)
 
 The 4-dim cross-group summary:
   [avg_queue, max_queue, avg_waiting_time, boundary_queue]
 
 New methods for Step 2:
-  get_signals_with_global()  — forward pass with other group's summary
-  store_with_global()        — store 28-dim experience in buffer
+  get_signals_with_global()  â€” forward pass with other group's summary
+  store_with_global()        â€” store 28-dim experience in buffer
 """
 
 import numpy as np
@@ -21,17 +21,17 @@ import random
 import os
 
 
-# ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 1. Neural Network
-# ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class SupervisorNetwork(nn.Module):
     """
     3-layer MLP for the supervisor.
 
-    Step 1 (local):  input_dim = 24  (4 agents × 6-dim)
+    Step 1 (local):  input_dim = 24  (4 agents Ã— 6-dim)
     Step 2 (global): input_dim = 28  (24 own + 4 from other supervisor)
 
-    Output: 4 coordination signals via tanh → range [-1, +1]
+    Output: 4 coordination signals via tanh â†’ range [-1, +1]
     """
     def __init__(self, input_dim=24, hidden_dim=64, output_dim=4):
         super(SupervisorNetwork, self).__init__()
@@ -52,9 +52,9 @@ class SupervisorNetwork(nn.Module):
         return x
 
 
-# ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 2. Replay Buffer
-# ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class SupervisorReplayBuffer:
     """
     Experience replay for the supervisor.
@@ -85,15 +85,15 @@ class SupervisorReplayBuffer:
         return len(self.buffer)
 
 
-# ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # 3. Supervisor Agent
-# ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 class SupervisorAgent:
     """
     Supervisor for one group of 4 intersections.
 
     Responsibilities:
-      - Collect all local states → build 24-dim group state
+      - Collect all local states â†’ build 24-dim group state
       - Output 4 coordination signals (one per agent)
       - Train on group average reward via TD learning
       - Update target network periodically
@@ -132,38 +132,33 @@ class SupervisorAgent:
         self.batch_size         = batch_size
         self.train_step         = 0
 
-        # ── Device ──────────────────────────────────────────────────
+        # â”€â”€ Device â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        if torch.cuda.is_available():
-            print(f"  [Supervisor] GPU: {torch.cuda.get_device_name(0)}")
-        else:
-            print("  [Supervisor] Using CPU")
-
-        # ── Networks ────────────────────────────────────────────────
+        # â”€â”€ Networks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         self.online_net = SupervisorNetwork(self.input_dim, hidden_dim, self.output_dim).to(self.device)
         self.target_net = SupervisorNetwork(self.input_dim, hidden_dim, self.output_dim).to(self.device)
         self.target_net.load_state_dict(self.online_net.state_dict())
         self.target_net.eval()
 
-        # ── Optimizer ───────────────────────────────────────────────
+        # â”€â”€ Optimizer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         self.optimizer = torch.optim.Adam(self.online_net.parameters(), lr=learning_rate)
 
-        # ── Replay buffer ───────────────────────────────────────────
+        # â”€â”€ Replay buffer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         self.memory = SupervisorReplayBuffer(capacity=buffer_capacity)
 
-    # ── Helpers ─────────────────────────────────────────────────────
+    # â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def _build_group_state(self, local_states_dict):
         """
-        Concatenate each agent's 6-dim local state → 24-dim group state.
+        Concatenate each agent's 6-dim local state â†’ 24-dim group state.
         Order follows self.group_tls_ids.
         """
         return np.concatenate([local_states_dict[tls] for tls in self.group_tls_ids],
                               dtype=np.float32)
 
-    # ── Core API ────────────────────────────────────────────────────
+    # â”€â”€ Core API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def get_signals(self, local_states_dict):
         """
-        Step 1 forward pass — local only (24-dim).
+        Step 1 forward pass â€” local only (24-dim).
 
         Args:
             local_states_dict: {tls_id: np.array shape (6,)}
@@ -183,7 +178,7 @@ class SupervisorAgent:
 
     def get_signals_with_global(self, local_states_dict, other_summary):
         """
-        Step 2 forward pass — local (24-dim) + cross-group summary (4-dim) = 28-dim.
+        Step 2 forward pass â€” local (24-dim) + cross-group summary (4-dim) = 28-dim.
 
         Args:
             local_states_dict: {tls_id: np.array shape (6,)}
@@ -236,7 +231,7 @@ class SupervisorAgent:
         group_state      = self._build_group_state(local_states_dict)
         next_group_state = self._build_group_state(next_local_states_dict)
 
-        # Concatenate with cross-group summary → 28-dim
+        # Concatenate with cross-group summary â†’ 28-dim
         full_state      = np.concatenate([group_state,      other_summary.astype(np.float32)])
         next_full_state = np.concatenate([next_group_state, next_other_summary.astype(np.float32)])
 
@@ -248,7 +243,7 @@ class SupervisorAgent:
 
         Training signal:
           current_signals = online_net(state)           # (batch, 4)
-          td_target       = r + γ × mean(target_net(s')) broadcast to (batch, 4)
+          td_target       = r + Î³ Ã— mean(target_net(s')) broadcast to (batch, 4)
           loss            = MSE(current_signals, td_target)
 
         Returns: loss value (float) or None if buffer too small.
@@ -268,7 +263,7 @@ class SupervisorAgent:
         # TD target
         with torch.no_grad():
             next_signals = self.target_net(next_states)                      # (B, 4)
-            # Scalar target per sample → broadcast across 4 signal outputs
+            # Scalar target per sample â†’ broadcast across 4 signal outputs
             td_target = rewards + (1 - dones) * self.gamma * next_signals.mean(dim=1, keepdim=True)
             td_target = td_target.expand_as(current_signals)                 # (B, 4)
 
@@ -283,10 +278,10 @@ class SupervisorAgent:
         return loss.item()
 
     def update_target_network(self):
-        """Hard copy: online → target."""
+        """Hard copy: online â†’ target."""
         self.target_net.load_state_dict(self.online_net.state_dict())
 
-    # ── Persistence ─────────────────────────────────────────────────
+    # â”€â”€ Persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     def save(self, path):
         """Save supervisor checkpoint."""
         os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
@@ -296,7 +291,7 @@ class SupervisorAgent:
             'optimizer' : self.optimizer.state_dict(),
             'train_step': self.train_step,
         }, path)
-        print(f"  ✓ Supervisor saved → {path}")
+        print(f"  âœ“ Supervisor saved â†’ {path}")
 
     def load(self, path):
         """Load supervisor checkpoint."""
@@ -305,19 +300,19 @@ class SupervisorAgent:
         self.target_net.load_state_dict(ckpt['target_net'])
         self.optimizer.load_state_dict(ckpt['optimizer'])
         self.train_step = ckpt.get('train_step', 0)
-        print(f"  ✓ Supervisor loaded ← {path}")
+        print(f"  âœ“ Supervisor loaded â† {path}")
 
 
-# ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Quick smoke-test (run this file directly to verify)
-# ─────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 if __name__ == '__main__':
     print("=== SupervisorAgent smoke test (local + global) ===\n")
 
     group_ids   = ['tls_1', 'tls_2', 'tls_3', 'tls_4']
     group_ids_b = ['tls_5', 'tls_6', 'tls_7', 'tls_8']
 
-    # ── Step 1 (local only, 24-dim) ───────────────────────────────
+    # â”€â”€ Step 1 (local only, 24-dim) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print("--- Step 1: Local supervisor (24-dim) ---")
     sup_local = SupervisorAgent(group_tls_ids=group_ids, global_summary_dim=0)
     fake_states = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
@@ -326,7 +321,7 @@ if __name__ == '__main__':
     for tls, sig in signals.items():
         print(f"  {tls}: {sig:+.4f}")
 
-    # ── Step 2 (global, 28-dim) ───────────────────────────────────
+    # â”€â”€ Step 2 (global, 28-dim) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     print("\n--- Step 2: Global supervisor (28-dim) ---")
     sup_global = SupervisorAgent(group_tls_ids=group_ids, global_summary_dim=4)
 
@@ -339,7 +334,7 @@ if __name__ == '__main__':
     for tls, sig in signals_global.items():
         print(f"  {tls}: {sig:+.4f}")
 
-    # ── Test store_with_global + train ────────────────────────────
+    # â”€â”€ Test store_with_global + train â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     fake_next        = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
     fake_next_summary = np.array([7.0, 12.0, 40.0, 20.0], dtype=np.float32)
     for _ in range(100):
@@ -353,8 +348,8 @@ if __name__ == '__main__':
     loss = sup_global.train()
     print(f"\nTraining loss (28-dim): {loss:.6f}")
 
-    # ── Save / load ───────────────────────────────────────────────
+    # â”€â”€ Save / load â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     sup_global.save('checkpoints_supervisor/test_global_supervisor.pth')
     sup_global.load('checkpoints_supervisor/test_global_supervisor.pth')
 
-    print("\n✅ All checks passed! (local + global)")
+    print("\nâœ… All checks passed! (local + global)")

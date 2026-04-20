@@ -1,4 +1,4 @@
-"""
+﻿"""
 DDQN Agent for Traffic Light Control
 """
 
@@ -12,6 +12,9 @@ from replay_buffer import ReplayBuffer
 
 
 class DDQNAgent:
+    # Class-level flag to ensure GPU/CPU status is only printed once per script run
+    _hardware_status_printed = False
+
     def __init__(self, 
                  state_dim=6, 
                  action_dim=2,
@@ -49,14 +52,18 @@ class DDQNAgent:
         # Device configuration - Auto-detect GPU or use CPU
         if torch.cuda.is_available():
             self.device = torch.device("cuda:0")
-            print(f"🚀 GPU ENABLED - Using: {torch.cuda.get_device_name(0)}")
-            print(f"   CUDA Version: {torch.version.cuda}")
-            print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+            if not DDQNAgent._hardware_status_printed:
+                print(f"🚀 GPU ENABLED - Using: {torch.cuda.get_device_name(0)}")
+                print(f"   CUDA Version: {torch.version.cuda}")
+                print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+                DDQNAgent._hardware_status_printed = True
         else:
             self.device = torch.device("cpu")
-            print("⚠️  GPU NOT AVAILABLE - Using CPU (training will be slower)")
-            print("   To enable GPU: Install PyTorch with CUDA support")
-        
+            if not DDQNAgent._hardware_status_printed:
+                print("⚠️  GPU NOT AVAILABLE - Using CPU (training will be slower)")
+                print("   To enable GPU: Install PyTorch with CUDA support")  
+                DDQNAgent._hardware_status_printed = True
+
         # Initialize networks
         self.online_network = DDQNNetwork(state_dim, action_dim, hidden_dim).to(self.device)
         self.target_network = DDQNNetwork(state_dim, action_dim, hidden_dim).to(self.device)
@@ -67,7 +74,6 @@ class DDQNAgent:
         
         # Verify device
         dummy = torch.zeros(1).to(self.device)
-        print(f"✓ Model loaded on: {dummy.device}")
         del dummy
         
         # Optimizer
@@ -198,4 +204,3 @@ class DDQNAgent:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.epsilon = checkpoint['epsilon']
         self.training_step = checkpoint['training_step']
-        print(f"Model loaded from {filepath}")
