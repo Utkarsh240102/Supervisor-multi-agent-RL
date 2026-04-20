@@ -60,3 +60,5 @@ summary*.xml
 security-plan.md
 
 claude.md
+# Security Phase Data
+data_security/
