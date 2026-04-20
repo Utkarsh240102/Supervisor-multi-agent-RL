@@ -283,6 +283,7 @@ def main() -> None:
         seed=args.seed,
     )
 
+summary_rows = []
     print("\nPer-scenario run complete. Saved files:")
     for scenario in SCENARIOS:
         print(f"  {os.path.join(RESULTS_DIR, f'{scenario}_results.csv')}")
@@ -293,6 +294,16 @@ def main() -> None:
             f"detection_rate={summary['detection_rate']:.3f}, "
             f"false_positive_rate={summary['false_positive_rate']:.3f}"
         )
+        # Store for combined table
+        row = {"scenario": scenario}
+        row.update(summary)
+        summary_rows.append(row)
+
+    # Save master summary table
+    summary_df = pd.DataFrame(summary_rows)
+    comparison_path = os.path.join(RESULTS_DIR, "scenario_comparison.csv")
+    summary_df.to_csv(comparison_path, index=False)
+    print(f"\n=> Master comparison saved to {comparison_path}")
 
 
 if __name__ == "__main__":
