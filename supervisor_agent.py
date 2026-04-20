@@ -295,7 +295,7 @@ class SupervisorAgent:
 
     def load(self, path):
         """Load supervisor checkpoint."""
-        ckpt = torch.load(path, map_location=self.device)
+        ckpt = torch.load(path, map_location=self.device, weights_only=True)
         self.online_net.load_state_dict(ckpt['online_net'])
         self.target_net.load_state_dict(ckpt['target_net'])
         self.optimizer.load_state_dict(ckpt['optimizer'])
