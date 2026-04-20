@@ -83,6 +83,45 @@ def plot_average_wait_time(summary_df):
     plt.savefig(output_path, dpi=300)
     plt.close()
 
+def plot_per_intersection_breakdown():
+    """Chart 3: Per-intersection reward breakdown (Attack vs Defense)"""
+    print("Generating Chart 3: Per-Intersection Breakdown...")
+    
+    attack_path = os.path.join(RESULTS_DIR, 'attack_results.csv')
+    defense_path = os.path.join(RESULTS_DIR, 'defense_results.csv')
+    
+    if not (os.path.exists(attack_path) and os.path.exists(defense_path)):
+        print(f"Error: Missing {attack_path} or {defense_path}")
+        return
+        
+    attack_df = pd.read_csv(attack_path)
+    defense_df = pd.read_csv(defense_path)
+    
+    tls_cols = [f'tls_{i}' for i in range(1, 9)]
+    attack_means = attack_df[tls_cols].mean()
+    defense_means = defense_df[tls_cols].mean()
+    
+    # Setup the figure
+    plt.figure(figsize=(12, 6))
+    x = np.arange(len(tls_cols))
+    width = 0.35
+    
+    # Plot grouped bars
+    plt.bar(x - width/2, attack_means, width, label='Attack (No Defense)', color=COLORS['attack'], alpha=0.85, edgecolor='black')
+    plt.bar(x + width/2, defense_means, width, label='Defense (LSTM Active)', color=COLORS['defense'], alpha=0.85, edgecolor='black')
+    
+    # Labels and formatting
+    plt.title('Vulnerability Map: Reward per Intersection (Attack vs Defense)', fontsize=14, fontweight='bold')
+    plt.ylabel('Average Reward (Higher is Better)', fontsize=12)
+    plt.xlabel('Traffic Light Intersection', fontsize=12)
+    plt.xticks(x, [f'TLS {i}' for i in range(1, 9)], fontsize=11)
+    plt.legend()
+    
+    plt.tight_layout()
+    output_path = os.path.join(ANALYSIS_DIR, '03_per_intersection_breakdown.png')
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
 def main():
     print(f"Loading data from {RESULTS_DIR}...")
     summary_path = os.path.join(RESULTS_DIR, "scenario_comparison.csv")
@@ -96,6 +135,7 @@ def main():
     # Generate charts
     plot_average_reward(summary_df)
     plot_average_wait_time(summary_df)
+    plot_per_intersection_breakdown()
     
     print(f"\nAll charts saved successfully to {ANALYSIS_DIR}/")
 
