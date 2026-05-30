@@ -191,9 +191,7 @@ def train(env, agents, supervisor_a, supervisor_b,
             next_enhanced = env.build_enhanced_states(
                 next_local_states, next_signals_a, next_signals_b)
 
-            # 4. Group average rewards (for supervisors)
-            group_a_reward = env.get_group_avg_reward(rewards, env.group_a)
-            group_b_reward = env.get_group_avg_reward(rewards, env.group_b)
+            # BUG-01 FIX: per-intersection rewards passed as dicts (not scalar average)
 
             # 5. Store + train local agents (individual reward)
             for tls in env.tls_ids:
@@ -204,10 +202,10 @@ def train(env, agents, supervisor_a, supervisor_b,
                 agents[tls].train()
                 ep_reward[tls] += rewards[tls]
 
-            # 6. Store + train supervisors (group avg reward)
+            # 6. Store + train supervisors (individual per-agent rewards)
             supervisor_a.store(
                 {tls: local_states[tls]      for tls in env.group_a},
-                group_a_reward,
+                {tls: rewards[tls]           for tls in env.group_a},
                 {tls: next_local_states[tls] for tls in env.group_a},
                 done
             )
@@ -217,7 +215,7 @@ def train(env, agents, supervisor_a, supervisor_b,
 
             supervisor_b.store(
                 {tls: local_states[tls]      for tls in env.group_b},
-                group_b_reward,
+                {tls: rewards[tls]           for tls in env.group_b},
                 {tls: next_local_states[tls] for tls in env.group_b},
                 done
             )
