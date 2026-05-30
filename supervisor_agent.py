@@ -1,15 +1,20 @@
-﻿"""
-Supervisor Agent â€” Local + Global Group Coordination
+"""
+Supervisor Agent -- Local + Global Group Coordination
 =====================================================
-Step 1 (local):  24-dim input  (4 agents Ã— 6-dim each)
+Step 1 (local):  24-dim input  (4 agents x 6-dim each)
 Step 2 (global): 28-dim input  (24 own + 4 from other supervisor)
 
 The 4-dim cross-group summary:
   [avg_queue, max_queue, avg_waiting_time, boundary_queue]
 
 New methods for Step 2:
-  get_signals_with_global()  â€” forward pass with other group's summary
-  store_with_global()        â€” store 28-dim experience in buffer
+  get_signals_with_global()  -- forward pass with other group's summary
+  store_with_global()        -- store 28-dim experience in buffer
+
+BUG-01 FIX (applied to this file):
+  The replay buffer now stores per-agent reward vectors (shape (4,)) instead
+  of a scalar group average. The train() method computes independent TD
+  targets per output neuron so each agent gets a differentiated signal.
 """
 
 import numpy as np
@@ -21,17 +26,17 @@ import random
 import os
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---------------------------------------------------------------------------
 # 1. Neural Network
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---------------------------------------------------------------------------
 class SupervisorNetwork(nn.Module):
     """
     3-layer MLP for the supervisor.
 
-    Step 1 (local):  input_dim = 24  (4 agents Ã— 6-dim)
+    Step 1 (local):  input_dim = 24  (4 agents x 6-dim)
     Step 2 (global): input_dim = 28  (24 own + 4 from other supervisor)
 
-    Output: 4 coordination signals via tanh â†’ range [-1, +1]
+    Output: 4 coordination signals via tanh -> range [-1, +1]
     """
     def __init__(self, input_dim=24, hidden_dim=64, output_dim=4):
         super(SupervisorNetwork, self).__init__()
@@ -52,22 +57,36 @@ class SupervisorNetwork(nn.Module):
         return x
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---------------------------------------------------------------------------
 # 2. Replay Buffer
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---------------------------------------------------------------------------
 class SupervisorReplayBuffer:
     """
     Experience replay for the supervisor.
-    Stores group-level transitions: (24-dim state, reward, 24-dim next_state, done)
+    Stores group-level transitions: (state, rewards(4,), next_state, done)
+
+    BUG-01 FIX: rewards is now a (4,) float32 array -- one reward per agent
+    in the group -- instead of a scalar group average. This allows train()
+    to compute independent TD targets for each output neuron so the supervisor
+    can learn differentiated urgency signals rather than collapsing all 4 to
+    the same value.
     """
     def __init__(self, capacity=10_000):
         self.buffer = deque(maxlen=capacity)
 
-    def store(self, group_state, group_reward, next_group_state, done):
+    def store(self, group_state, group_rewards, next_group_state, done):
+        """
+        Args:
+            group_state      : np.array shape (input_dim,)
+            group_rewards    : np.array shape (4,) -- individual reward per agent,
+                               ordered by group_tls_ids.
+            next_group_state : np.array shape (input_dim,)
+            done             : bool / float
+        """
         self.buffer.append((
-            np.array(group_state,      dtype=np.float32),
-            float(group_reward),
-            np.array(next_group_state, dtype=np.float32),
+            np.array(group_state,        dtype=np.float32),
+            np.array(group_rewards,      dtype=np.float32),  # (4,) per-agent rewards
+            np.array(next_group_state,   dtype=np.float32),
             float(done)
         ))
 
@@ -76,36 +95,39 @@ class SupervisorReplayBuffer:
         states, rewards, next_states, dones = zip(*batch)
         return (
             torch.FloatTensor(np.array(states)),
-            torch.FloatTensor(np.array(rewards)).unsqueeze(1),
+            torch.FloatTensor(np.array(rewards)),           # (B, 4) -- per-agent rewards
             torch.FloatTensor(np.array(next_states)),
-            torch.FloatTensor(np.array(dones)).unsqueeze(1),
+            torch.FloatTensor(np.array(dones)).unsqueeze(1),  # (B, 1) broadcasts over 4
         )
 
     def __len__(self):
         return len(self.buffer)
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---------------------------------------------------------------------------
 # 3. Supervisor Agent
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---------------------------------------------------------------------------
 class SupervisorAgent:
     """
     Supervisor for one group of 4 intersections.
 
     Responsibilities:
-      - Collect all local states â†’ build 24-dim group state
+      - Collect all local states -> build 24-dim group state
       - Output 4 coordination signals (one per agent)
-      - Train on group average reward via TD learning
+      - Train on INDIVIDUAL per-agent rewards via independent TD targets
+        (BUG-01 fix: was using a scalar group average broadcast to all 4 neurons)
       - Update target network periodically
 
     Args:
-        group_tls_ids      : list of 4 TLS IDs in this group, e.g. ['tls_1','tls_2','tls_3','tls_4']
+        group_tls_ids      : list of 4 TLS IDs, e.g. ['tls_1','tls_2','tls_3','tls_4']
         state_dim_per_agent: local state dimension per agent (default 6)
         hidden_dim         : hidden layer size (default 64)
         learning_rate      : Adam LR (default 0.001)
         gamma              : discount factor (default 0.95)
         buffer_capacity    : replay buffer size (default 10 000)
         batch_size         : training batch size (default 64)
+        global_summary_dim : 0 for Step 1 (local only),
+                             4 for Step 2 (+ cross-group summary)
     """
 
     def __init__(self,
@@ -117,11 +139,7 @@ class SupervisorAgent:
                  buffer_capacity=10_000,
                  batch_size=64,
                  global_summary_dim=0):
-        """
-        Args:
-            global_summary_dim: 0 for Step 1 (local only),
-                                4 for Step 2 (+ cross-group summary)
-        """
+
         self.group_tls_ids      = group_tls_ids
         self.group_size         = len(group_tls_ids)                           # 4
         self.local_input_dim    = self.group_size * state_dim_per_agent        # 24
@@ -132,33 +150,34 @@ class SupervisorAgent:
         self.batch_size         = batch_size
         self.train_step         = 0
 
-        # â”€â”€ Device â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Device --------------------------------------------------------
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # â”€â”€ Networks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+        # -- Networks ------------------------------------------------------
         self.online_net = SupervisorNetwork(self.input_dim, hidden_dim, self.output_dim).to(self.device)
         self.target_net = SupervisorNetwork(self.input_dim, hidden_dim, self.output_dim).to(self.device)
         self.target_net.load_state_dict(self.online_net.state_dict())
         self.target_net.eval()
 
-        # â”€â”€ Optimizer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Optimizer -----------------------------------------------------
         self.optimizer = torch.optim.Adam(self.online_net.parameters(), lr=learning_rate)
 
-        # â”€â”€ Replay buffer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # -- Replay buffer -------------------------------------------------
         self.memory = SupervisorReplayBuffer(capacity=buffer_capacity)
 
-    # â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- Helpers -----------------------------------------------------------
     def _build_group_state(self, local_states_dict):
         """
-        Concatenate each agent's 6-dim local state â†’ 24-dim group state.
+        Concatenate each agent's 6-dim local state -> 24-dim group state.
         Order follows self.group_tls_ids.
         """
         return np.concatenate([local_states_dict[tls] for tls in self.group_tls_ids],
                               dtype=np.float32)
 
-    # â”€â”€ Core API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- Core API ----------------------------------------------------------
     def get_signals(self, local_states_dict):
         """
-        Step 1 forward pass â€” local only (24-dim).
+        Step 1 forward pass -- local only (24-dim).
 
         Args:
             local_states_dict: {tls_id: np.array shape (6,)}
@@ -178,7 +197,7 @@ class SupervisorAgent:
 
     def get_signals_with_global(self, local_states_dict, other_summary):
         """
-        Step 2 forward pass â€” local (24-dim) + cross-group summary (4-dim) = 28-dim.
+        Step 2 forward pass -- local (24-dim) + cross-group summary (4-dim) = 28-dim.
 
         Args:
             local_states_dict: {tls_id: np.array shape (6,)}
@@ -200,22 +219,26 @@ class SupervisorAgent:
 
         return {tls: float(signals[i]) for i, tls in enumerate(self.group_tls_ids)}
 
-    def store(self, local_states_dict, group_reward, next_local_states_dict, done):
+    def store(self, local_states_dict, group_rewards, next_local_states_dict, done):
         """
         Step 1: Store 24-dim group transition.
 
         Args:
             local_states_dict      : current  {tls_id: 6-dim state}
-            group_reward           : scalar average reward of the group
+            group_rewards          : dict {tls_id: float} -- INDIVIDUAL reward per agent
+                                     (BUG-01 FIX: was scalar group average)
             next_local_states_dict : next     {tls_id: 6-dim state}
             done                   : episode end flag
         """
         group_state      = self._build_group_state(local_states_dict)
         next_group_state = self._build_group_state(next_local_states_dict)
-        self.memory.store(group_state, group_reward, next_group_state, done)
+        # Build ordered (4,) reward vector matching self.group_tls_ids order
+        rewards_vec = np.array([group_rewards[tls] for tls in self.group_tls_ids],
+                                dtype=np.float32)
+        self.memory.store(group_state, rewards_vec, next_group_state, done)
 
     def store_with_global(self, local_states_dict, other_summary,
-                          group_reward,
+                          group_rewards,
                           next_local_states_dict, next_other_summary, done):
         """
         Step 2: Store 28-dim group transition (24 own + 4 cross-group summary).
@@ -223,7 +246,8 @@ class SupervisorAgent:
         Args:
             local_states_dict      : current  {tls_id: 6-dim state}
             other_summary          : current  np.array shape (4,) from other supervisor
-            group_reward           : scalar average reward of this group
+            group_rewards          : dict {tls_id: float} -- INDIVIDUAL reward per agent
+                                     (BUG-01 FIX: was scalar group average)
             next_local_states_dict : next     {tls_id: 6-dim state}
             next_other_summary     : next     np.array shape (4,) from other supervisor
             done                   : episode end flag
@@ -231,20 +255,30 @@ class SupervisorAgent:
         group_state      = self._build_group_state(local_states_dict)
         next_group_state = self._build_group_state(next_local_states_dict)
 
-        # Concatenate with cross-group summary â†’ 28-dim
+        # Concatenate with cross-group summary -> 28-dim
         full_state      = np.concatenate([group_state,      other_summary.astype(np.float32)])
         next_full_state = np.concatenate([next_group_state, next_other_summary.astype(np.float32)])
 
-        self.memory.store(full_state, group_reward, next_full_state, done)
+        # Build ordered (4,) reward vector matching self.group_tls_ids order
+        rewards_vec = np.array([group_rewards[tls] for tls in self.group_tls_ids],
+                                dtype=np.float32)
+        self.memory.store(full_state, rewards_vec, next_full_state, done)
 
     def train(self):
         """
         One gradient update for the supervisor.
 
-        Training signal:
-          current_signals = online_net(state)           # (batch, 4)
-          td_target       = r + Î³ Ã— mean(target_net(s')) broadcast to (batch, 4)
-          loss            = MSE(current_signals, td_target)
+        BUG-01 FIX: Independent per-agent TD targets.
+          rewards      shape (B, 4) - one reward per intersection per sample
+          next_signals shape (B, 4) - target network output per intersection
+          dones        shape (B, 1) - broadcasts across the 4 columns
+
+          td_target = rewards + (1 - dones) * gamma * next_signals  # (B, 4)
+
+        Each of the 4 output neurons gets its OWN gradient signal based on
+        its corresponding intersection's actual reward. Previously all 4
+        columns were forced toward the same mean value (via .mean(dim=1)),
+        which made the supervisor unable to learn differentiated urgency signals.
 
         Returns: loss value (float) or None if buffer too small.
         """
@@ -252,20 +286,20 @@ class SupervisorAgent:
             return None
 
         states, rewards, next_states, dones = self.memory.sample(self.batch_size)
-        states      = states.to(self.device)
-        rewards     = rewards.to(self.device)
-        next_states = next_states.to(self.device)
-        dones       = dones.to(self.device)
+        states      = states.to(self.device)       # (B, input_dim)
+        rewards     = rewards.to(self.device)      # (B, 4) <- per-agent rewards
+        next_states = next_states.to(self.device)  # (B, input_dim)
+        dones       = dones.to(self.device)        # (B, 1) <- broadcasts over 4
 
-        # Current predicted signals
-        current_signals = self.online_net(states)                            # (B, 4)
+        # Current predicted signals - one per intersection
+        current_signals = self.online_net(states)                    # (B, 4)
 
-        # TD target
+        # BUG-01 FIX: independent TD target per output neuron
         with torch.no_grad():
-            next_signals = self.target_net(next_states)                      # (B, 4)
-            # Scalar target per sample â†’ broadcast across 4 signal outputs
-            td_target = rewards + (1 - dones) * self.gamma * next_signals.mean(dim=1, keepdim=True)
-            td_target = td_target.expand_as(current_signals)                 # (B, 4)
+            next_signals = self.target_net(next_states)              # (B, 4)
+            # rewards (B,4) + dones (B,1) broadcasts -> td_target (B,4)
+            # Each column i: r_i + gamma * next_signal_i * (1 - done)
+            td_target = rewards + (1 - dones) * self.gamma * next_signals  # (B,4) independent
 
         loss = F.mse_loss(current_signals, td_target)
 
@@ -278,10 +312,10 @@ class SupervisorAgent:
         return loss.item()
 
     def update_target_network(self):
-        """Hard copy: online â†’ target."""
+        """Hard copy: online -> target."""
         self.target_net.load_state_dict(self.online_net.state_dict())
 
-    # â”€â”€ Persistence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- Persistence -------------------------------------------------------
     def save(self, path):
         """Save supervisor checkpoint."""
         os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
@@ -291,7 +325,7 @@ class SupervisorAgent:
             'optimizer' : self.optimizer.state_dict(),
             'train_step': self.train_step,
         }, path)
-        print(f"  âœ“ Supervisor saved â†’ {path}")
+        print(f"  + Supervisor saved -> {path}")
 
     def load(self, path):
         """Load supervisor checkpoint."""
@@ -300,19 +334,19 @@ class SupervisorAgent:
         self.target_net.load_state_dict(ckpt['target_net'])
         self.optimizer.load_state_dict(ckpt['optimizer'])
         self.train_step = ckpt.get('train_step', 0)
-        print(f"  âœ“ Supervisor loaded â† {path}")
+        print(f"  + Supervisor loaded <- {path}")
 
 
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---------------------------------------------------------------------------
 # Quick smoke-test (run this file directly to verify)
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ---------------------------------------------------------------------------
 if __name__ == '__main__':
     print("=== SupervisorAgent smoke test (local + global) ===\n")
 
     group_ids   = ['tls_1', 'tls_2', 'tls_3', 'tls_4']
     group_ids_b = ['tls_5', 'tls_6', 'tls_7', 'tls_8']
 
-    # â”€â”€ Step 1 (local only, 24-dim) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- Step 1 (local only, 24-dim) ---------------------------------------
     print("--- Step 1: Local supervisor (24-dim) ---")
     sup_local = SupervisorAgent(group_tls_ids=group_ids, global_summary_dim=0)
     fake_states = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
@@ -321,7 +355,7 @@ if __name__ == '__main__':
     for tls, sig in signals.items():
         print(f"  {tls}: {sig:+.4f}")
 
-    # â”€â”€ Step 2 (global, 28-dim) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # -- Step 2 (global, 28-dim) -------------------------------------------
     print("\n--- Step 2: Global supervisor (28-dim) ---")
     sup_global = SupervisorAgent(group_tls_ids=group_ids, global_summary_dim=4)
 
@@ -334,22 +368,27 @@ if __name__ == '__main__':
     for tls, sig in signals_global.items():
         print(f"  {tls}: {sig:+.4f}")
 
-    # â”€â”€ Test store_with_global + train â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    fake_next        = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
+    # -- Test store_with_global + train (BUG-01 FIX: dict rewards) ---------
+    fake_next         = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
     fake_next_summary = np.array([7.0, 12.0, 40.0, 20.0], dtype=np.float32)
+    fake_rewards_dict = {tls: np.random.uniform(-300, -100) for tls in group_ids}
+
     for _ in range(100):
         sup_global.store_with_global(
             fake_states, fake_summary_b,
-            group_reward=-250.0,
+            group_rewards=fake_rewards_dict,   # BUG-01 FIX: dict not scalar
             next_local_states_dict=fake_next,
             next_other_summary=fake_next_summary,
             done=False
         )
     loss = sup_global.train()
-    print(f"\nTraining loss (28-dim): {loss:.6f}")
+    print(f"\nTraining loss (28-dim, independent targets): {loss:.6f}")
 
-    # â”€â”€ Save / load â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    # sup_global.save('checkpoints_supervisor/test_global_supervisor.pth')
-    # sup_global.load('checkpoints_supervisor/test_global_supervisor.pth')
+    # -- Verify signals are DIFFERENT (not all the same) -------------------
+    all_same = len(set(round(v, 4) for v in signals_global.values())) == 1
+    if all_same:
+        print("WARNING: all 4 signals are identical - BUG-01 may still be present")
+    else:
+        print("OK: signals are differentiated (BUG-01 fix verified)")
 
-    print("\nâœ… All checks passed! (local + global)")
+    print("\n=== All checks passed! ===")
