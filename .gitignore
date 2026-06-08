@@ -35,15 +35,12 @@ Thumbs.db
 tripinfo*.xml
 summary*.xml
 
-# Large model files (optional - see notes below)
-# Uncomment these if models are too large for GitHub (>100MB)
-# models/*.pth
-# checkpoints/*.pth
-# experiments/**/*.pth
+# Models and Checkpoints
+# Ignore all intermediate episode backups to prevent GitHub bloat
+*episode*.pth
 
-# Keep model files if they're small (<100MB each)
-# GitHub allows files up to 100MB
-# Your PyTorch models are likely 10-50MB, so they're fine to commit
+# The final models (e.g. *_final.pth) and models/ directory
+# are kept because they are not matched by the rule above.
 
 # Training outputs (keep these - they're small CSV/PNG files)
 # results/
