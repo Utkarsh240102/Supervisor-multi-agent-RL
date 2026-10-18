@@ -19,13 +19,14 @@ class DDQNAgent:
                  state_dim=6, 
                  action_dim=2,
                  hidden_dim=128,
-                 learning_rate=0.001,
+                 learning_rate=0.0001,
                  gamma=0.95,
-                 epsilon_start=1.0,
+                 epsilon_start=0.20,
                  epsilon_decay=0.995,
-                 epsilon_min=0.01,
+                 epsilon_min=0.02,
                  batch_size=64,
-                 buffer_capacity=10000):
+                 buffer_capacity=10000,
+                 epsilon_steps=50000):
         """
         DDQN Agent for Traffic Light Control
         
@@ -48,6 +49,9 @@ class DDQNAgent:
         self.epsilon_decay = epsilon_decay
         self.epsilon_min = epsilon_min
         self.batch_size = batch_size
+        self.epsilon_start = epsilon_start
+        self.epsilon_steps = epsilon_steps
+        self.decision_step = 0
         
         # Device configuration - Auto-detect GPU or use CPU
         if torch.cuda.is_available():
@@ -100,6 +104,9 @@ class DDQNAgent:
         Returns:
             action: Selected action (0 or 1)
         """
+        if training and self.epsilon_steps:
+            self.epsilon = self.epsilon_start + (self.epsilon_min - self.epsilon_start) * min(1., self.decision_step / self.epsilon_steps)
+            self.decision_step += 1
         # Epsilon-greedy exploration during training
         if training and random.random() < self.epsilon:
             return random.randint(0, self.action_dim - 1)
@@ -163,6 +170,8 @@ class DDQNAgent:
         self.training_step += 1
         loss_value = loss.item()
         self.loss_history.append(loss_value)
+        if len(self.loss_history) > 10000:
+            del self.loss_history[:1000]
         
         return loss_value
     
@@ -172,7 +181,8 @@ class DDQNAgent:
     
     def decay_epsilon(self):
         """Decay epsilon for exploration-exploitation tradeoff"""
-        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+        if not self.epsilon_steps:
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
     
     def save(self, filepath):
         """
@@ -191,7 +201,7 @@ class DDQNAgent:
         torch.save(checkpoint, filepath)
         print(f"Model saved to {filepath}")
     
-    def load(self, filepath):
+    def load(self, filepath, resume=False, fold_advisory=False):
         """
         Load model checkpoint
         
@@ -199,8 +209,37 @@ class DDQNAgent:
             filepath: Path to load checkpoint from
         """
         checkpoint = torch.load(filepath, map_location=self.device, weights_only=True)
-        self.online_network.load_state_dict(checkpoint['online_network_state_dict'])
-        self.target_network.load_state_dict(checkpoint['target_network_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.epsilon = checkpoint['epsilon']
-        self.training_step = checkpoint['training_step']
+        if resume:
+            raise ValueError('Exact resume requires a corrected campaign bundle; legacy files support weight import only')
+        self.import_weights(checkpoint['online_network_state_dict'], fold_advisory)
+
+    def import_weights(self, weights, fold_advisory=False):
+        weights = {k: v.clone().to(self.device) for k, v in weights.items()}
+        if fold_advisory:
+            if self.state_dim != 7 or weights['network.0.weight'].shape[1] != 7:
+                raise ValueError('Constant-advisory folding requires seven input features')
+            weights['network.0.bias'] -= weights['network.0.weight'][:, 6]
+            weights['network.0.weight'][:, 6] = 0
+        self.online_network.load_state_dict(weights)
+        self.update_target_network()
+
+    def state_dict(self):
+        return {'schema': 'local-ddqn-v1', 'state_dim': self.state_dim,
+                'online': self.online_network.state_dict(), 'target': self.target_network.state_dict(),
+                'optimizer': self.optimizer.state_dict(), 'training_step': self.training_step,
+                'decision_step': self.decision_step, 'epsilon': self.epsilon,
+                'epsilon_start': self.epsilon_start, 'epsilon_min': self.epsilon_min,
+                'epsilon_steps': self.epsilon_steps, 'replay': list(self.memory.buffer),
+                'capacity': self.memory.buffer.maxlen}
+
+    def load_state_dict(self, state, resume=True):
+        from collections import deque
+        if state.get('schema') != 'local-ddqn-v1' or state.get('state_dim') != self.state_dim:
+            raise ValueError('Incompatible local-controller checkpoint schema')
+        self.online_network.load_state_dict(state['online'])
+        self.target_network.load_state_dict(state['target'])
+        if resume:
+            self.optimizer.load_state_dict(state['optimizer'])
+            for name in ('training_step', 'decision_step', 'epsilon', 'epsilon_start', 'epsilon_min', 'epsilon_steps'):
+                setattr(self, name, state[name])
+            self.memory.buffer = deque(state['replay'], maxlen=state['capacity'])

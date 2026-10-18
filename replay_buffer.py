@@ -29,7 +29,8 @@ class ReplayBuffer:
             next_state: Next state
             done: Whether episode ended
         """
-        experience = (state, action, reward, next_state, done)
+        experience = (np.array(state, dtype=np.float32, copy=True), int(action), float(reward),
+                      np.array(next_state, dtype=np.float32, copy=True), bool(done))
         self.buffer.append(experience)
     
     def sample(self, batch_size):

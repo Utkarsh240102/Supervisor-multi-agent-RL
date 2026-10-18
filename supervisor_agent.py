@@ -1,394 +1,174 @@
-"""
-Supervisor Agent -- Local + Global Group Coordination
-=====================================================
-Step 1 (local):  24-dim input  (4 agents x 6-dim each)
-Step 2 (global): 28-dim input  (24 own + 4 from other supervisor)
+"""Action-conditioned Double DQN supervisor with 3**4 joint advisory actions."""
+from __future__ import annotations
 
-The 4-dim cross-group summary:
-  [avg_queue, max_queue, avg_waiting_time, boundary_queue]
-
-New methods for Step 2:
-  get_signals_with_global()  -- forward pass with other group's summary
-  store_with_global()        -- store 28-dim experience in buffer
-
-BUG-01 FIX (applied to this file):
-  The replay buffer now stores per-agent reward vectors (shape (4,)) instead
-  of a scalar group average. The train() method computes independent TD
-  targets per output neuron so each agent gets a differentiated signal.
-"""
+from collections import deque
+from itertools import product
+from pathlib import Path
+import random
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from collections import deque
-import random
-import os
+from torch import nn
+from torch.nn import functional as F
+
+SIGNAL_ACTIONS = np.asarray(list(product((-1., 0., 1.), repeat=4)), dtype=np.float32)
+SUPERVISOR_SCHEMA = 'joint-ddqn-81-v1'
 
 
-# ---------------------------------------------------------------------------
-# 1. Neural Network
-# ---------------------------------------------------------------------------
 class SupervisorNetwork(nn.Module):
-    """
-    3-layer MLP for the supervisor.
-
-    Step 1 (local):  input_dim = 24  (4 agents x 6-dim)
-    Step 2 (global): input_dim = 28  (24 own + 4 from other supervisor)
-
-    Output: 4 coordination signals via tanh -> range [-1, +1]
-    """
-    def __init__(self, input_dim=24, hidden_dim=64, output_dim=4):
-        super(SupervisorNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, output_dim)
-        self._init_weights()
-
-    def _init_weights(self):
-        for layer in [self.fc1, self.fc2, self.fc3]:
+    def __init__(self, input_dim=24, hidden_dim=64, output_dim=81):
+        super().__init__()
+        if output_dim != 81:
+            raise ValueError('The corrected supervisor has 81 joint Q-actions')
+        self.fc1, self.fc2, self.fc3 = nn.Linear(input_dim, hidden_dim), nn.Linear(hidden_dim, hidden_dim), nn.Linear(hidden_dim, output_dim)
+        for layer in (self.fc1, self.fc2, self.fc3):
             nn.init.xavier_uniform_(layer.weight)
             nn.init.zeros_(layer.bias)
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = torch.tanh(self.fc3(x))   # Signals in [-1, +1]
-        return x
+        return self.fc3(F.relu(self.fc2(F.relu(self.fc1(x)))))
 
 
-# ---------------------------------------------------------------------------
-# 2. Replay Buffer
-# ---------------------------------------------------------------------------
 class SupervisorReplayBuffer:
-    """
-    Experience replay for the supervisor.
-    Stores group-level transitions: (state, rewards(4,), next_state, done)
-
-    BUG-01 FIX: rewards is now a (4,) float32 array -- one reward per agent
-    in the group -- instead of a scalar group average. This allows train()
-    to compute independent TD targets for each output neuron so the supervisor
-    can learn differentiated urgency signals rather than collapsing all 4 to
-    the same value.
-    """
     def __init__(self, capacity=10_000):
         self.buffer = deque(maxlen=capacity)
 
-    def store(self, group_state, group_rewards, next_group_state, done):
-        """
-        Args:
-            group_state      : np.array shape (input_dim,)
-            group_rewards    : np.array shape (4,) -- individual reward per agent,
-                               ordered by group_tls_ids.
-            next_group_state : np.array shape (input_dim,)
-            done             : bool / float
-        """
-        self.buffer.append((
-            np.array(group_state,        dtype=np.float32),
-            np.array(group_rewards,      dtype=np.float32),  # (4,) per-agent rewards
-            np.array(next_group_state,   dtype=np.float32),
-            float(done)
-        ))
+    def store(self, state, action, reward, next_state, done):
+        if not 0 <= int(action) < 81:
+            raise ValueError('Joint action must be in [0, 80]')
+        self.buffer.append((np.array(state, dtype=np.float32, copy=True), int(action), float(reward),
+                            np.array(next_state, dtype=np.float32, copy=True), float(done)))
 
-    def sample(self, batch_size):
-        batch = random.sample(self.buffer, batch_size)
-        states, rewards, next_states, dones = zip(*batch)
-        return (
-            torch.FloatTensor(np.array(states)),
-            torch.FloatTensor(np.array(rewards)),           # (B, 4) -- per-agent rewards
-            torch.FloatTensor(np.array(next_states)),
-            torch.FloatTensor(np.array(dones)).unsqueeze(1),  # (B, 1) broadcasts over 4
-        )
+    def sample(self, size):
+        s, a, r, ns, d = zip(*random.sample(self.buffer, size))
+        return (torch.tensor(np.asarray(s)), torch.tensor(a).unsqueeze(1),
+                torch.tensor(r, dtype=torch.float32).unsqueeze(1), torch.tensor(np.asarray(ns)),
+                torch.tensor(d, dtype=torch.float32).unsqueeze(1))
 
     def __len__(self):
         return len(self.buffer)
 
 
-# ---------------------------------------------------------------------------
-# 3. Supervisor Agent
-# ---------------------------------------------------------------------------
 class SupervisorAgent:
-    """
-    Supervisor for one group of 4 intersections.
-
-    Responsibilities:
-      - Collect all local states -> build 24-dim group state
-      - Output 4 coordination signals (one per agent)
-      - Train on INDIVIDUAL per-agent rewards via independent TD targets
-        (BUG-01 fix: was using a scalar group average broadcast to all 4 neurons)
-      - Update target network periodically
-
-    Args:
-        group_tls_ids      : list of 4 TLS IDs, e.g. ['tls_1','tls_2','tls_3','tls_4']
-        state_dim_per_agent: local state dimension per agent (default 6)
-        hidden_dim         : hidden layer size (default 64)
-        learning_rate      : Adam LR (default 0.001)
-        gamma              : discount factor (default 0.95)
-        buffer_capacity    : replay buffer size (default 10 000)
-        batch_size         : training batch size (default 64)
-        global_summary_dim : 0 for Step 1 (local only),
-                             4 for Step 2 (+ cross-group summary)
-    """
-
-    def __init__(self,
-                 group_tls_ids,
-                 state_dim_per_agent=6,
-                 hidden_dim=64,
-                 learning_rate=0.001,
-                 gamma=0.95,
-                 buffer_capacity=10_000,
-                 batch_size=64,
-                 global_summary_dim=0):
-
-        self.group_tls_ids      = group_tls_ids
-        self.group_size         = len(group_tls_ids)                           # 4
-        self.local_input_dim    = self.group_size * state_dim_per_agent        # 24
-        self.global_summary_dim = global_summary_dim                           # 0 or 4
-        self.input_dim          = self.local_input_dim + global_summary_dim    # 24 or 28
-        self.output_dim         = self.group_size                              # 4
-        self.gamma              = gamma
-        self.batch_size         = batch_size
-        self.train_step         = 0
-
-        # -- Device --------------------------------------------------------
+    def __init__(self, group_tls_ids, state_dim_per_agent=6, hidden_dim=64,
+                 learning_rate=5e-4, gamma=.95, buffer_capacity=10_000,
+                 batch_size=64, global_summary_dim=0):
+        self.group_tls_ids = list(group_tls_ids)
+        if len(self.group_tls_ids) != 4 or global_summary_dim not in (0, 4):
+            raise ValueError('Four local agents and zero/four summary features are required')
+        self.local_input_dim = 4 * state_dim_per_agent
+        self.global_summary_dim = global_summary_dim
+        self.input_dim = self.local_input_dim + global_summary_dim
+        self.output_dim, self.gamma, self.batch_size = 81, gamma, batch_size
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-        # -- Networks ------------------------------------------------------
-        self.online_net = SupervisorNetwork(self.input_dim, hidden_dim, self.output_dim).to(self.device)
-        self.target_net = SupervisorNetwork(self.input_dim, hidden_dim, self.output_dim).to(self.device)
-        self.target_net.load_state_dict(self.online_net.state_dict())
+        self.online_net = SupervisorNetwork(self.input_dim, hidden_dim).to(self.device)
+        self.target_net = SupervisorNetwork(self.input_dim, hidden_dim).to(self.device)
+        self.update_target_network()
         self.target_net.eval()
-
-        # -- Optimizer -----------------------------------------------------
         self.optimizer = torch.optim.Adam(self.online_net.parameters(), lr=learning_rate)
+        self.memory = SupervisorReplayBuffer(buffer_capacity)
+        self.train_step, self.decision_step = 0, 0
+        self.epsilon = 1.
 
-        # -- Replay buffer -------------------------------------------------
-        self.memory = SupervisorReplayBuffer(capacity=buffer_capacity)
+    def _build_group_state(self, states, other_summary=None):
+        state = np.concatenate([states[tls] for tls in self.group_tls_ids]).astype(np.float32)
+        if self.global_summary_dim:
+            if other_summary is None:
+                raise ValueError('Communicating supervisor requires the other group summary')
+            state = np.concatenate([state, np.asarray(other_summary, dtype=np.float32)])
+        if state.shape != (self.input_dim,):
+            raise ValueError(f'Expected supervisor input ({self.input_dim},), got {state.shape}')
+        return state
 
-    # -- Helpers -----------------------------------------------------------
-    def _build_group_state(self, local_states_dict):
-        """
-        Concatenate each agent's 6-dim local state -> 24-dim group state.
-        Order follows self.group_tls_ids.
-        """
-        return np.concatenate([local_states_dict[tls] for tls in self.group_tls_ids],
-                              dtype=np.float32)
+    @staticmethod
+    def encode_signals(signals):
+        values = tuple(float(v) for v in signals)
+        if len(values) != 4 or any(v not in (-1., 0., 1.) for v in values):
+            raise ValueError('Four ternary advisory signals are required')
+        return int(sum((int(v) + 1) * 3 ** (3 - i) for i, v in enumerate(values)))
 
-    # -- Core API ----------------------------------------------------------
-    def get_signals(self, local_states_dict):
-        """
-        Step 1 forward pass -- local only (24-dim).
-
-        Args:
-            local_states_dict: {tls_id: np.array shape (6,)}
-
-        Returns:
-            signals_dict: {tls_id: float in [-1, +1]}
-        """
-        group_state  = self._build_group_state(local_states_dict)
-        state_tensor = torch.FloatTensor(group_state).unsqueeze(0).to(self.device)
-
-        self.online_net.eval()
+    def select_action(self, local_states, other_summary=None, training=False):
+        state = self._build_group_state(local_states, other_summary)
+        if training:
+            self.epsilon = 1. - .95 * min(1., self.decision_step / 50_000)
+            self.decision_step += 1
+        if training and random.random() < self.epsilon:
+            return random.randrange(81)
         with torch.no_grad():
-            signals = self.online_net(state_tensor).squeeze(0).cpu().numpy()
-        self.online_net.train()
+            return int(self.online_net(torch.as_tensor(state, device=self.device).unsqueeze(0)).argmax(1).item())
 
-        return {tls: float(signals[i]) for i, tls in enumerate(self.group_tls_ids)}
+    def signals_for_action(self, action):
+        return dict(zip(self.group_tls_ids, SIGNAL_ACTIONS[int(action)].tolist()))
 
-    def get_signals_with_global(self, local_states_dict, other_summary):
-        """
-        Step 2 forward pass -- local (24-dim) + cross-group summary (4-dim) = 28-dim.
+    def get_signals(self, local_states_dict, training=False):
+        return self.signals_for_action(self.select_action(local_states_dict, training=training))
 
-        Args:
-            local_states_dict: {tls_id: np.array shape (6,)}
-            other_summary    : np.array shape (4,)
-                               [avg_queue, max_queue, avg_waiting_time, boundary_queue]
-                               from the OTHER supervisor group
+    def get_signals_with_global(self, local_states_dict, other_summary, training=False):
+        return self.signals_for_action(self.select_action(local_states_dict, other_summary, training))
 
-        Returns:
-            signals_dict: {tls_id: float in [-1, +1]}
-        """
-        group_state   = self._build_group_state(local_states_dict)            # 24-dim
-        global_state  = np.concatenate([group_state, other_summary.astype(np.float32)])  # 28-dim
-        state_tensor  = torch.FloatTensor(global_state).unsqueeze(0).to(self.device)
+    def store(self, local_states_dict, group_rewards, next_local_states_dict, done, *, action):
+        reward = .01 * float(np.mean([group_rewards[tls] for tls in self.group_tls_ids]))
+        self.memory.store(self._build_group_state(local_states_dict), action, reward,
+                          self._build_group_state(next_local_states_dict), done)
 
-        self.online_net.eval()
-        with torch.no_grad():
-            signals = self.online_net(state_tensor).squeeze(0).cpu().numpy()
-        self.online_net.train()
-
-        return {tls: float(signals[i]) for i, tls in enumerate(self.group_tls_ids)}
-
-    def store(self, local_states_dict, group_rewards, next_local_states_dict, done):
-        """
-        Step 1: Store 24-dim group transition.
-
-        Args:
-            local_states_dict      : current  {tls_id: 6-dim state}
-            group_rewards          : dict {tls_id: float} -- INDIVIDUAL reward per agent
-                                     (BUG-01 FIX: was scalar group average)
-            next_local_states_dict : next     {tls_id: 6-dim state}
-            done                   : episode end flag
-        """
-        group_state      = self._build_group_state(local_states_dict)
-        next_group_state = self._build_group_state(next_local_states_dict)
-        # Build ordered (4,) reward vector matching self.group_tls_ids order
-        rewards_vec = np.array([group_rewards[tls] for tls in self.group_tls_ids],
-                                dtype=np.float32)
-        self.memory.store(group_state, rewards_vec, next_group_state, done)
-
-    def store_with_global(self, local_states_dict, other_summary,
-                          group_rewards,
-                          next_local_states_dict, next_other_summary, done):
-        """
-        Step 2: Store 28-dim group transition (24 own + 4 cross-group summary).
-
-        Args:
-            local_states_dict      : current  {tls_id: 6-dim state}
-            other_summary          : current  np.array shape (4,) from other supervisor
-            group_rewards          : dict {tls_id: float} -- INDIVIDUAL reward per agent
-                                     (BUG-01 FIX: was scalar group average)
-            next_local_states_dict : next     {tls_id: 6-dim state}
-            next_other_summary     : next     np.array shape (4,) from other supervisor
-            done                   : episode end flag
-        """
-        group_state      = self._build_group_state(local_states_dict)
-        next_group_state = self._build_group_state(next_local_states_dict)
-
-        # Concatenate with cross-group summary -> 28-dim
-        full_state      = np.concatenate([group_state,      other_summary.astype(np.float32)])
-        next_full_state = np.concatenate([next_group_state, next_other_summary.astype(np.float32)])
-
-        # Build ordered (4,) reward vector matching self.group_tls_ids order
-        rewards_vec = np.array([group_rewards[tls] for tls in self.group_tls_ids],
-                                dtype=np.float32)
-        self.memory.store(full_state, rewards_vec, next_full_state, done)
+    def store_with_global(self, local_states_dict, other_summary, group_rewards,
+                          next_local_states_dict, next_other_summary, done, *, action):
+        reward = .01 * float(np.mean([group_rewards[tls] for tls in self.group_tls_ids]))
+        self.memory.store(self._build_group_state(local_states_dict, other_summary), action, reward,
+                          self._build_group_state(next_local_states_dict, next_other_summary), done)
 
     def train(self):
-        """
-        One gradient update for the supervisor.
-
-        BUG-01 FIX: Independent per-agent TD targets.
-          rewards      shape (B, 4) - one reward per intersection per sample
-          next_signals shape (B, 4) - target network output per intersection
-          dones        shape (B, 1) - broadcasts across the 4 columns
-
-          td_target = rewards + (1 - dones) * gamma * next_signals  # (B, 4)
-
-        Each of the 4 output neurons gets its OWN gradient signal based on
-        its corresponding intersection's actual reward. Previously all 4
-        columns were forced toward the same mean value (via .mean(dim=1)),
-        which made the supervisor unable to learn differentiated urgency signals.
-
-        Returns: loss value (float) or None if buffer too small.
-        """
         if len(self.memory) < self.batch_size:
             return None
-
-        states, rewards, next_states, dones = self.memory.sample(self.batch_size)
-        states      = states.to(self.device)       # (B, input_dim)
-        rewards     = rewards.to(self.device)      # (B, 4) <- per-agent rewards
-        next_states = next_states.to(self.device)  # (B, input_dim)
-        dones       = dones.to(self.device)        # (B, 1) <- broadcasts over 4
-
-        # Current predicted signals - one per intersection
-        current_signals = self.online_net(states)                    # (B, 4)
-
-        # BUG-01 FIX: independent TD target per output neuron
+        states, actions, rewards, next_states, dones = (v.to(self.device) for v in self.memory.sample(self.batch_size))
+        values = self.online_net(states).gather(1, actions)
         with torch.no_grad():
-            next_signals = self.target_net(next_states)              # (B, 4)
-            # rewards (B,4) + dones (B,1) broadcasts -> td_target (B,4)
-            # Each column i: r_i + gamma * next_signal_i * (1 - done)
-            td_target = rewards + (1 - dones) * self.gamma * next_signals  # (B,4) independent
-
-        loss = F.mse_loss(current_signals, td_target)
-
+            next_actions = self.online_net(next_states).argmax(1, keepdim=True)
+            targets = rewards + (1 - dones) * self.gamma * self.target_net(next_states).gather(1, next_actions)
+        loss = F.smooth_l1_loss(values, targets)
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.online_net.parameters(), max_norm=10.0)
+        nn.utils.clip_grad_norm_(self.online_net.parameters(), 10.)
         self.optimizer.step()
-
         self.train_step += 1
+        if self.train_step % 2000 == 0:
+            self.update_target_network()
         return loss.item()
 
     def update_target_network(self):
-        """Hard copy: online -> target."""
         self.target_net.load_state_dict(self.online_net.state_dict())
 
-    # -- Persistence -------------------------------------------------------
+    def state_dict(self):
+        return {'schema': SUPERVISOR_SCHEMA, 'input_dim': self.input_dim,
+                'online_net': self.online_net.state_dict(), 'target_net': self.target_net.state_dict(),
+                'optimizer': self.optimizer.state_dict(), 'train_step': self.train_step,
+                'decision_step': self.decision_step, 'epsilon': self.epsilon,
+                'replay': list(self.memory.buffer), 'capacity': self.memory.buffer.maxlen}
+
+    def load_state_dict(self, state, resume=True):
+        if state.get('schema') != SUPERVISOR_SCHEMA or state.get('input_dim') != self.input_dim:
+            raise ValueError('Incompatible supervisor: legacy tanh checkpoints cannot train a joint-action supervisor')
+        self.online_net.load_state_dict(state['online_net'])
+        self.target_net.load_state_dict(state['target_net'])
+        if resume:
+            self.optimizer.load_state_dict(state['optimizer'])
+            self.train_step, self.decision_step, self.epsilon = state['train_step'], state['decision_step'], state['epsilon']
+            self.memory.buffer = deque(state['replay'], maxlen=state['capacity'])
+
+    def initialize_from_local(self, local):
+        if self.input_dim != 28 or local.input_dim != 24:
+            raise ValueError('Transfer is supported only from local 24-input to communicating 28-input')
+        state = {k: v.clone() for k, v in local.online_net.state_dict().items()}
+        weight = torch.zeros_like(self.online_net.fc1.weight)
+        weight[:, :24] = state['fc1.weight']
+        state['fc1.weight'] = weight
+        self.online_net.load_state_dict(state)
+        self.update_target_network()
+
     def save(self, path):
-        """Save supervisor checkpoint."""
-        os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
-        torch.save({
-            'online_net': self.online_net.state_dict(),
-            'target_net': self.target_net.state_dict(),
-            'optimizer' : self.optimizer.state_dict(),
-            'train_step': self.train_step,
-        }, path)
-        print(f"  + Supervisor saved -> {path}")
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.state_dict(), path)
 
-    def load(self, path):
-        """Load supervisor checkpoint."""
-        ckpt = torch.load(path, map_location=self.device, weights_only=True)
-        self.online_net.load_state_dict(ckpt['online_net'])
-        self.target_net.load_state_dict(ckpt['target_net'])
-        self.optimizer.load_state_dict(ckpt['optimizer'])
-        self.train_step = ckpt.get('train_step', 0)
-        print(f"  + Supervisor loaded <- {path}")
-
-
-# ---------------------------------------------------------------------------
-# Quick smoke-test (run this file directly to verify)
-# ---------------------------------------------------------------------------
-if __name__ == '__main__':
-    print("=== SupervisorAgent smoke test (local + global) ===\n")
-
-    group_ids   = ['tls_1', 'tls_2', 'tls_3', 'tls_4']
-    group_ids_b = ['tls_5', 'tls_6', 'tls_7', 'tls_8']
-
-    # -- Step 1 (local only, 24-dim) ---------------------------------------
-    print("--- Step 1: Local supervisor (24-dim) ---")
-    sup_local = SupervisorAgent(group_tls_ids=group_ids, global_summary_dim=0)
-    fake_states = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
-    signals = sup_local.get_signals(fake_states)
-    print("Local signals:")
-    for tls, sig in signals.items():
-        print(f"  {tls}: {sig:+.4f}")
-
-    # -- Step 2 (global, 28-dim) -------------------------------------------
-    print("\n--- Step 2: Global supervisor (28-dim) ---")
-    sup_global = SupervisorAgent(group_tls_ids=group_ids, global_summary_dim=4)
-
-    # Fake cross-group summary from Group B
-    fake_summary_b = np.array([8.0, 15.0, 48.3, 26.0], dtype=np.float32)
-    # [avg_queue, max_queue, avg_waiting_time, boundary_queue]
-
-    signals_global = sup_global.get_signals_with_global(fake_states, other_summary=fake_summary_b)
-    print("Global signals (A sees B's summary):")
-    for tls, sig in signals_global.items():
-        print(f"  {tls}: {sig:+.4f}")
-
-    # -- Test store_with_global + train (BUG-01 FIX: dict rewards) ---------
-    fake_next         = {tls: np.random.rand(6).astype(np.float32) for tls in group_ids}
-    fake_next_summary = np.array([7.0, 12.0, 40.0, 20.0], dtype=np.float32)
-    fake_rewards_dict = {tls: np.random.uniform(-300, -100) for tls in group_ids}
-
-    for _ in range(100):
-        sup_global.store_with_global(
-            fake_states, fake_summary_b,
-            group_rewards=fake_rewards_dict,   # BUG-01 FIX: dict not scalar
-            next_local_states_dict=fake_next,
-            next_other_summary=fake_next_summary,
-            done=False
-        )
-    loss = sup_global.train()
-    print(f"\nTraining loss (28-dim, independent targets): {loss:.6f}")
-
-    # -- Verify signals are DIFFERENT (not all the same) -------------------
-    all_same = len(set(round(v, 4) for v in signals_global.values())) == 1
-    if all_same:
-        print("WARNING: all 4 signals are identical - BUG-01 may still be present")
-    else:
-        print("OK: signals are differentiated (BUG-01 fix verified)")
-
-    print("\n=== All checks passed! ===")
+    def load(self, path, resume=False):
+        # Corrected bundles contain NumPy replay arrays; only use trusted local files.
+        self.load_state_dict(torch.load(path, map_location=self.device, weights_only=False), resume=resume)
