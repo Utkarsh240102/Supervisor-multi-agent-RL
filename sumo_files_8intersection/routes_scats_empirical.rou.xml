@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+    <vType id="car" accel="2.6" decel="4.5" sigma="0.5" length="5.0" minGap="2.5" maxSpeed="50.0" guiShape="passenger"/>
+
+    <!-- Routes definition -->
+    <route id="n1_s1" edges="n_ext1_to_1 1_to_3 3_to_s_ext1"/>
+    <route id="n2_s2" edges="n_ext2_to_2 2_to_4 4_to_s_ext2"/>
+    <route id="n3_s3" edges="n_ext3_to_5 5_to_7 7_to_s_ext3"/>
+    <route id="n4_s4" edges="n_ext4_to_6 6_to_8 8_to_s_ext4"/>
+    <route id="s1_n1" edges="s_ext1_to_3 3_to_1 1_to_n_ext1"/>
+    <route id="s2_n2" edges="s_ext2_to_4 4_to_2 2_to_n_ext2"/>
+    <route id="s3_n3" edges="s_ext3_to_7 7_to_5 5_to_n_ext3"/>
+    <route id="s4_n4" edges="s_ext4_to_8 8_to_6 6_to_n_ext4"/>
+    <route id="w1_e1" edges="w_ext1_to_1 1_to_2 2_to_5 5_to_6 6_to_e_ext1"/>
+    <route id="w2_e2" edges="w_ext2_to_3 3_to_4 4_to_7 7_to_8 8_to_e_ext2"/>
+    <route id="e1_w1" edges="e_ext1_to_6 6_to_5 5_to_2 2_to_1 1_to_w_ext1"/>
+    <route id="e2_w2" edges="e_ext2_to_8 8_to_7 7_to_4 4_to_3 3_to_w_ext2"/>
+
+    <!-- Tier 1: 0-900s (Pre-Peak) -->
+    <flow id="f_n1_s1_t1" type="car" route="n1_s1" begin="0" end="900" probability="0.02"/>
+    <flow id="f_n2_s2_t1" type="car" route="n2_s2" begin="0" end="900" probability="0.02"/>
+    <flow id="f_n3_s3_t1" type="car" route="n3_s3" begin="0" end="900" probability="0.02"/>
+    <flow id="f_n4_s4_t1" type="car" route="n4_s4" begin="0" end="900" probability="0.02"/>
+    <flow id="f_w1_e1_t1" type="car" route="w1_e1" begin="0" end="900" probability="0.02"/>
+    <flow id="f_w2_e2_t1" type="car" route="w2_e2" begin="0" end="900" probability="0.02"/>
+    <flow id="f_e1_w1_t1" type="car" route="e1_w1" begin="0" end="900" probability="0.02"/>
+    <flow id="f_e2_w2_t1" type="car" route="e2_w2" begin="0" end="900" probability="0.02"/>
+
+    <!-- Tier 2: 900-1800s (Rising Peak) -->
+    <flow id="f_n1_s1_t2" type="car" route="n1_s1" begin="900" end="1800" probability="0.04"/>
+    <flow id="f_n2_s2_t2" type="car" route="n2_s2" begin="900" end="1800" probability="0.04"/>
+    <flow id="f_n3_s3_t2" type="car" route="n3_s3" begin="900" end="1800" probability="0.04"/>
+    <flow id="f_n4_s4_t2" type="car" route="n4_s4" begin="900" end="1800" probability="0.04"/>
+    <flow id="f_w1_e1_t2" type="car" route="w1_e1" begin="900" end="1800" probability="0.04"/>
+    <flow id="f_w2_e2_t2" type="car" route="w2_e2" begin="900" end="1800" probability="0.04"/>
+    <flow id="f_e1_w1_t2" type="car" route="e1_w1" begin="900" end="1800" probability="0.04"/>
+    <flow id="f_e2_w2_t2" type="car" route="e2_w2" begin="900" end="1800" probability="0.04"/>
+
+    <!-- Tier 3: 1800-2700s (Peak SCATS Bottleneck) -->
+    <flow id="f_n1_s1_t3" type="car" route="n1_s1" begin="1800" end="2700" probability="0.07"/>
+    <flow id="f_n2_s2_t3" type="car" route="n2_s2" begin="1800" end="2700" probability="0.07"/>
+    <flow id="f_n3_s3_t3" type="car" route="n3_s3" begin="1800" end="2700" probability="0.07"/>
+    <flow id="f_n4_s4_t3" type="car" route="n4_s4" begin="1800" end="2700" probability="0.07"/>
+    <flow id="f_w1_e1_t3" type="car" route="w1_e1" begin="1800" end="2700" probability="0.07"/>
+    <flow id="f_w2_e2_t3" type="car" route="w2_e2" begin="1800" end="2700" probability="0.07"/>
+    <flow id="f_e1_w1_t3" type="car" route="e1_w1" begin="1800" end="2700" probability="0.07"/>
+    <flow id="f_e2_w2_t3" type="car" route="e2_w2" begin="1800" end="2700" probability="0.07"/>
+
+    <!-- Tier 4: 2700-3600s (Post-Peak Taper) -->
+    <flow id="f_n1_s1_t4" type="car" route="n1_s1" begin="2700" end="3600" probability="0.025"/>
+    <flow id="f_n2_s2_t4" type="car" route="n2_s2" begin="2700" end="3600" probability="0.025"/>
+    <flow id="f_n3_s3_t4" type="car" route="n3_s3" begin="2700" end="3600" probability="0.025"/>
+    <flow id="f_n4_s4_t4" type="car" route="n4_s4" begin="2700" end="3600" probability="0.025"/>
+    <flow id="f_w1_e1_t4" type="car" route="w1_e1" begin="2700" end="3600" probability="0.025"/>
+    <flow id="f_w2_e2_t4" type="car" route="w2_e2" begin="2700" end="3600" probability="0.025"/>
+    <flow id="f_e1_w1_t4" type="car" route="e1_w1" begin="2700" end="3600" probability="0.025"/>
+    <flow id="f_e2_w2_t4" type="car" route="e2_w2" begin="2700" end="3600" probability="0.025"/>
+</routes>

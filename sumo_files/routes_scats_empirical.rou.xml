@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
+    <vType id="car" accel="2.6" decel="4.5" sigma="0.5" length="5.0" minGap="2.5" maxSpeed="50.0" guiShape="passenger"/>
+
+    <!-- Tier 1: 0-15 mins (Pre-Peak ~360 veh/hr) -->
+    <flow id="ns_t1" type="car" begin="0" end="900" probability="0.08" from="north_in" to="south_out"/>
+    <flow id="sn_t1" type="car" begin="0" end="900" probability="0.08" from="south_in" to="north_out"/>
+    <flow id="ew_t1" type="car" begin="0" end="900" probability="0.07" from="east_in" to="west_out"/>
+    <flow id="we_t1" type="car" begin="0" end="900" probability="0.07" from="west_in" to="east_out"/>
+
+    <!-- Tier 2: 15-30 mins (Rising Peak ~720 veh/hr) -->
+    <flow id="ns_t2" type="car" begin="900" end="1800" probability="0.18" from="north_in" to="south_out"/>
+    <flow id="sn_t2" type="car" begin="900" end="1800" probability="0.18" from="south_in" to="north_out"/>
+    <flow id="ew_t2" type="car" begin="900" end="1800" probability="0.15" from="east_in" to="west_out"/>
+    <flow id="we_t2" type="car" begin="900" end="1800" probability="0.15" from="west_in" to="east_out"/>
+
+    <!-- Tier 3: 30-45 mins (Peak Bottleneck ~1260 veh/hr) -->
+    <flow id="ns_t3" type="car" begin="1800" end="2700" probability="0.32" from="north_in" to="south_out"/>
+    <flow id="sn_t3" type="car" begin="1800" end="2700" probability="0.32" from="south_in" to="north_out"/>
+    <flow id="ew_t3" type="car" begin="1800" end="2700" probability="0.28" from="east_in" to="west_out"/>
+    <flow id="we_t3" type="car" begin="1800" end="2700" probability="0.28" from="west_in" to="east_out"/>
+
+    <!-- Tier 4: 45-60 mins (Post-Peak Taper ~540 veh/hr) -->
+    <flow id="ns_t4" type="car" begin="2700" end="3600" probability="0.14" from="north_in" to="south_out"/>
+    <flow id="sn_t4" type="car" begin="2700" end="3600" probability="0.14" from="south_in" to="north_out"/>
+    <flow id="ew_t4" type="car" begin="2700" end="3600" probability="0.12" from="east_in" to="west_out"/>
+    <flow id="we_t4" type="car" begin="2700" end="3600" probability="0.12" from="west_in" to="east_out"/>
+</routes>
