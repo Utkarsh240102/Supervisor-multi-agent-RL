@@ -90,7 +90,8 @@ class TrafficLSTM(nn.Module):
         else:
             history_tensor = history.float()
 
-        if history_tensor.ndim == 2:
+        unbatched = history_tensor.ndim == 2
+        if unbatched:
             history_tensor = history_tensor.unsqueeze(0)
         elif history_tensor.ndim != 3:
             raise ValueError(
@@ -99,8 +100,8 @@ class TrafficLSTM(nn.Module):
 
         history_tensor = history_tensor.to(self.device)
         pred = self.forward(history_tensor)
-        pred = pred[0].detach().cpu().numpy().astype(np.float32)
-        return pred
+        pred = pred.detach().cpu().numpy().astype(np.float32)
+        return pred[0] if unbatched else pred
 
     def save(self, path: str) -> None:
         """Save model checkpoint with architecture metadata."""
@@ -134,7 +135,7 @@ class TrafficLSTM(nn.Module):
         map_location = torch.device(device) if device is not None else torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
-        checkpoint = torch.load(path, map_location=map_location)
+        checkpoint = torch.load(path, map_location=map_location, weights_only=True)
 
         if "state_dict" not in checkpoint or "config" not in checkpoint:
             raise ValueError("Invalid checkpoint format: expected keys 'state_dict' and 'config'")
